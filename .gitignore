@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pyo
+*.exe
+.sc_history.json
+*.mp4
+*.part
+*.temp
+.DS_Store
+Thumbs.db
+*.log
