@@ -14,7 +14,7 @@ import time
 import tkinter as tk
 from datetime import datetime
 from tkinter import filedialog, messagebox, ttk
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse, parse_qs, urlencode, urlunparse
 
 try:
     from curl_cffi import requests as curl_requests
@@ -112,8 +112,8 @@ class StreamingCommunityAPI:
 class ScrapeEngine:
     """Estrazione URL M3U8 da vixcloud.co."""
 
-    def __init__(self):
-        self.session = curl_requests.Session(impersonate="chrome")
+    def __init__(self, session=None):
+        self.session = session or curl_requests.Session(impersonate="chrome")
 
     def build_m3u8(self, title_id, episode_id):
         """Costruisce l'URL M3U8 partendo dal title_id e episode_id."""
@@ -154,9 +154,15 @@ class ScrapeEngine:
         playlist_url = url_match.group(1)
         can_fhd = fhd_match.group(1) == "true" if fhd_match else False
 
-        m3u8_url = f"{playlist_url}&token={token}&expires={expires}"
+        parsed = urlparse(playlist_url)
+        params = parse_qs(parsed.query, keep_blank_values=True)
+        params["token"] = [token]
+        params["expires"] = [expires]
         if can_fhd:
-            m3u8_url += "&h=1"
+            params["h"] = ["1"]
+        flat_params = "&".join(f"{k}={v[0]}" for k, v in params.items())
+        sep = "&" if parsed.query else "?"
+        m3u8_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}{sep}{flat_params}"
 
         return m3u8_url
 
@@ -175,7 +181,8 @@ class DownloadManager:
         self.current_index = -1
         self.is_downloading = False
         self._stop_flag = False
-        self.scrape = ScrapeEngine()
+        self.api = StreamingCommunityAPI()
+        self.scrape = ScrapeEngine(session=self.api.session)
         self.history = HistoryManager()
 
     def add(self, item):
@@ -330,8 +337,8 @@ class ScDownloaderApp(tk.Tk):
         self.minsize(650, 700)
         self.configure(bg="#1e1e2e")
 
-        self.api = StreamingCommunityAPI()
         self.download_manager = None
+        self.api = None
         self.current_results = []
         self.current_title_data = None
         self.output_folder = os.path.dirname(os.path.abspath(__file__))
@@ -759,6 +766,7 @@ class ScDownloaderApp(tk.Tk):
             status_callback=self._status_callback,
             finished_callback=self._on_download_finished,
         )
+        self.api = self.download_manager.api
 
 
 # ─── Main ────────────────────────────────────────────────────────────────────
