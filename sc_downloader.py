@@ -33,46 +33,31 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 # ─── StreamingCommunityAPI ───────────────────────────────────────────────────
 
 class StreamingCommunityAPI:
-    """Comunicazione con StreamingCommunity tramite Inertia.js."""
+    """Comunicazione con StreamingCommunity parsing data-page HTML."""
 
     def __init__(self):
         self.session = curl_requests.Session(impersonate="chrome")
-        self.inertia_version = None
-        self._ensure_version()
 
-    def _headers(self, extra=None):
-        h = {
+    def _headers(self):
+        return {
             "User-Agent": USER_AGENT,
             "Referer": f"{BASE_URL}/",
-            "Accept": "text/html, application/xhtml+xml",
         }
-        if self.inertia_version:
-            h["X-Inertia"] = "true"
-            h["X-Inertia-Version"] = self.inertia_version
-        if extra:
-            h.update(extra)
-        return h
 
-    def _ensure_version(self):
-        if self.inertia_version:
-            return
-        try:
-            resp = self.session.get(f"{BASE_URL}/it/watch/6343?e=369417", headers=self._headers())
-            m = re.search(r'"version"\s*:\s*"([^"]+)"', resp.text)
-            if m:
-                self.inertia_version = m.group(1)
-        except Exception:
-            self.inertia_version = "c56f6596919426ecf4c2a3db4f01ac7d"
+    def _parse_data_page(self, html):
+        """Estrae il JSON dal data-page attribute di Inertia.js."""
+        m = re.search(r'data-page="([^"]+)"', html)
+        if not m:
+            return None
+        return json.loads(m.group(1).replace("&quot;", '"').replace("&amp;", "&"))
 
     def search(self, query, page=1):
         """Cerca titoli. Restituisce lista di dict con id, name, type, score, slug, seasons_count."""
-        params = {"q": query, "page": page, "lang": "it"}
-        headers = self._headers({
-            "X-Inertia-Partial-Component": "Titles/Browse",
-            "X-Inertia-Partial-Data": "titles,totalCount",
-        })
-        resp = self.session.get(f"{BASE_URL}/it/search", headers=headers, params=params)
-        data = resp.json()
+        params = {"q": query, "page": page}
+        resp = self.session.get(f"{BASE_URL}/it/search", headers=self._headers(), params=params)
+        data = self._parse_data_page(resp.text)
+        if not data:
+            return [], 0
         titles = data.get("props", {}).get("titles", [])
         total = data.get("props", {}).get("totalCount", 0)
         results = []
@@ -94,11 +79,10 @@ class StreamingCommunityAPI:
         """Ottiene dettagli titolo con lista stagioni e episodi della prima stagione."""
         url = f"{BASE_URL}/it/titles/{title_id}-{slug}"
         resp = self.session.get(url, headers=self._headers())
-        m = re.search(r'data-page="([^"]+)"', resp.text)
-        if not m:
+        data = self._parse_data_page(resp.text)
+        if not data:
             return None
-        page_data = json.loads(m.group(1).replace("&quot;", '"').replace("&amp;", "&"))
-        props = page_data.get("props", {})
+        props = data.get("props", {})
         title = props.get("title", {})
         loaded_season = props.get("loadedSeason", {})
         seasons = title.get("seasons", [])
@@ -116,11 +100,10 @@ class StreamingCommunityAPI:
         """Ottiene episodi di una stagione specifica."""
         url = f"{BASE_URL}/it/titles/{title_id}-{slug}/season-{season_number}"
         resp = self.session.get(url, headers=self._headers())
-        m = re.search(r'data-page="([^"]+)"', resp.text)
-        if not m:
+        data = self._parse_data_page(resp.text)
+        if not data:
             return []
-        page_data = json.loads(m.group(1).replace("&quot;", '"').replace("&amp;", "&"))
-        loaded_season = page_data.get("props", {}).get("loadedSeason", {})
+        loaded_season = data.get("props", {}).get("loadedSeason", {})
         return loaded_season.get("episodes", [])
 
 
@@ -129,23 +112,16 @@ class StreamingCommunityAPI:
 class ScrapeEngine:
     """Estrazione URL M3U8 da vixcloud.co."""
 
-    def __init__(self, api=None):
-        self.api = api or StreamingCommunityAPI()
+    def __init__(self):
         self.session = curl_requests.Session(impersonate="chrome")
 
-    def build_m3u8(self, scws_id, episode_name=""):
-        """Costruisce l'URL M3U8 partendo dal scws_id dell'episodio."""
-        embed_url = f"{BASE_URL}/it/iframe/0?episode_id=0"
-        resp_html = self.session.get(
-            f"{BASE_URL}/it/iframe/0?episode_id=0",
-            headers={"User-Agent": USER_AGENT, "Referer": f"{BASE_URL}/"},
-        )
-
-        # Costruiamo direttamente l'URL dell'iframe con l'episode_id corretto
-        iframe_url = f"{BASE_URL}/it/iframe/0?episode_id={scws_id}"
+    def build_m3u8(self, title_id, episode_id):
+        """Costruisce l'URL M3U8 partendo dal title_id e episode_id."""
+        # Step 1: Fetch the iframe page to get the vixcloud embed URL
+        iframe_url = f"{BASE_URL}/it/iframe/{title_id}?episode_id={episode_id}"
         resp_html = self.session.get(
             iframe_url,
-            headers={"User-Agent": USER_AGENT, "Referer": f"{BASE_URL}/it/watch/0"},
+            headers={"User-Agent": USER_AGENT, "Referer": f"{BASE_URL}/it/watch/{title_id}"},
         )
 
         vix_match = re.search(r'src="(https://vixcloud\.co/embed[^"]+)"', resp_html.text)
@@ -154,6 +130,7 @@ class ScrapeEngine:
 
         vix_url = vix_match.group(1).replace("&amp;", "&")
 
+        # Step 2: Fetch the vixcloud embed page to get playlist info
         resp_vix = self.session.get(
             vix_url,
             headers={"User-Agent": USER_AGENT, "Referer": f"{BASE_URL}/"},
@@ -174,10 +151,10 @@ class ScrapeEngine:
 
         token = token_match.group(1)
         expires = expires_match.group(1)
-        base_url = url_match.group(1)
+        playlist_url = url_match.group(1)
         can_fhd = fhd_match.group(1) == "true" if fhd_match else False
 
-        m3u8_url = f"{base_url}&token={token}&expires={expires}"
+        m3u8_url = f"{playlist_url}&token={token}&expires={expires}"
         if can_fhd:
             m3u8_url += "&h=1"
 
@@ -259,7 +236,7 @@ class DownloadManager:
         self.finished_callback()
 
     def _download_one(self, item):
-        m3u8_url = self.scrape.build_m3u8(item["scws_id"], item.get("episode_name", ""))
+        m3u8_url = self.scrape.build_m3u8(item["title_id"], item["episode_id"])
 
         safe_name = re.sub(r'[<>:"/\\|?*]', '_', item["title_name"])
         filename = f"{safe_name}_S{item['season']:02d}E{item['episode']:02d}"
@@ -673,15 +650,17 @@ class ScDownloaderApp(tk.Tk):
             messagebox.showwarning("Attenzione", "Seleziona almeno un episodio")
             return
         season_num = int(self.season_var.get())
+        title_id = self.current_title_data["id"]
         for idx in sel:
             if idx < len(self.current_episodes):
                 ep = self.current_episodes[idx]
                 self.download_manager.add({
                     "title_name": self.current_title_data["name"],
+                    "title_id": title_id,
                     "season": season_num,
                     "episode": ep.get("number", idx + 1),
+                    "episode_id": ep.get("id", 0),
                     "episode_name": ep.get("name", ""),
-                    "scws_id": ep.get("scws_id", 0),
                     "duration": ep.get("duration", 0),
                     "status": "in_coda",
                     "progress": 0,
