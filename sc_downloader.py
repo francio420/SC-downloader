@@ -369,8 +369,43 @@ class ScDownloaderApp(tk.Tk):
         style.configure("Horizontal.TProgressbar", background="#89b4fa", troughcolor="#313244")
 
     def _build_ui(self):
+        # ── Contenitore scrollabile ──
+        # Necessario perché con window manager a tiling la finestra puo'
+        # essere ridimensionata piu' piccola del contenuto, tagliando i
+        # controlli in basso (es. il pulsante "Scarica Tutti").
+        canvas = tk.Canvas(self, bg="#1e1e2e", highlightthickness=0)
+        canvas.pack(side="left", fill="both", expand=True)
+
+        scrollbar = ttk.Scrollbar(self, orient="vertical", command=canvas.yview)
+        scrollbar.pack(side="right", fill="y")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        container = ttk.Frame(canvas)
+        container_id = canvas.create_window((0, 0), window=container, anchor="nw")
+
+        def _on_container_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _on_canvas_configure(event):
+            canvas.itemconfig(container_id, width=event.width)
+
+        container.bind("<Configure>", _on_container_configure)
+        canvas.bind("<Configure>", _on_canvas_configure)
+
+        def _on_mousewheel(event):
+            if event.num == 4:
+                canvas.yview_scroll(-1, "units")
+            elif event.num == 5:
+                canvas.yview_scroll(1, "units")
+            else:
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        canvas.bind_all("<Button-4>", _on_mousewheel)
+        canvas.bind_all("<Button-5>", _on_mousewheel)
+
         # ── Top: Ricerca ──
-        search_frame = ttk.Frame(self)
+        search_frame = ttk.Frame(container)
         search_frame.pack(fill="x", padx=10, pady=(10, 5))
 
         ttk.Label(search_frame, text="Ricerca:").pack(side="left", padx=(0, 5))
@@ -386,10 +421,10 @@ class ScDownloaderApp(tk.Tk):
         self.search_status.pack(side="left", padx=5)
 
         # ── Risultati ricerca ──
-        results_label = ttk.Label(self, text="Risultati Ricerca", font=("Segoe UI", 10, "bold"))
+        results_label = ttk.Label(container, text="Risultati Ricerca", font=("Segoe UI", 10, "bold"))
         results_label.pack(anchor="w", padx=10, pady=(5, 2))
 
-        results_frame = ttk.Frame(self)
+        results_frame = ttk.Frame(container)
         results_frame.pack(fill="x", padx=10, pady=(0, 5))
 
         self.results_listbox = tk.Listbox(
@@ -407,10 +442,10 @@ class ScDownloaderApp(tk.Tk):
         ttk.Button(btn_results, text="Pagina successiva", command=self._next_page).pack(side="right")
 
         # ── Episodi ──
-        episodes_label = ttk.Label(self, text="Episodi", font=("Segoe UI", 10, "bold"))
+        episodes_label = ttk.Label(container, text="Episodi", font=("Segoe UI", 10, "bold"))
         episodes_label.pack(anchor="w", padx=10, pady=(5, 2))
 
-        ep_header = ttk.Frame(self)
+        ep_header = ttk.Frame(container)
         ep_header.pack(fill="x", padx=10)
         ttk.Label(ep_header, text="Stagione:").pack(side="left")
         self.season_var = tk.StringVar()
@@ -421,7 +456,7 @@ class ScDownloaderApp(tk.Tk):
         self.ep_title_label = ttk.Label(ep_header, text="", foreground="#a6adc8")
         self.ep_title_label.pack(side="left", padx=10)
 
-        episodes_frame = ttk.Frame(self)
+        episodes_frame = ttk.Frame(container)
         episodes_frame.pack(fill="x", padx=10, pady=(0, 3))
 
         # Scrollbar per episodi
@@ -438,20 +473,20 @@ class ScDownloaderApp(tk.Tk):
         self.episodes_listbox.pack(fill="x")
         ep_scroll.config(command=self.episodes_listbox.yview)
 
-        btn_ep = ttk.Frame(self)
+        btn_ep = ttk.Frame(container)
         btn_ep.pack(fill="x", padx=10, pady=(0, 8))
         ttk.Button(btn_ep, text="Aggiungi Selezionati alla Coda", command=self._add_to_queue).pack(side="left")
         ttk.Button(btn_ep, text="Seleziona Tutti", command=self._select_all_episodes).pack(side="left", padx=5)
         ttk.Button(btn_ep, text="Deseleziona Tutti", command=self._deselect_all_episodes).pack(side="left")
 
         # ── Separatore ──
-        ttk.Separator(self, orient="horizontal").pack(fill="x", padx=10, pady=3)
+        ttk.Separator(container, orient="horizontal").pack(fill="x", padx=10, pady=3)
 
         # ── Coda Download ──
-        queue_label = ttk.Label(self, text="Coda Download", font=("Segoe UI", 10, "bold"))
+        queue_label = ttk.Label(container, text="Coda Download", font=("Segoe UI", 10, "bold"))
         queue_label.pack(anchor="w", padx=10, pady=(3, 2))
 
-        queue_frame = ttk.Frame(self)
+        queue_frame = ttk.Frame(container)
         queue_frame.pack(fill="both", expand=True, padx=10, pady=(0, 3))
 
         cols = ("titolo", "stato", "progresso")
@@ -468,13 +503,13 @@ class ScDownloaderApp(tk.Tk):
         q_scroll.pack(side="right", fill="y")
         self.queue_tree.configure(yscrollcommand=q_scroll.set)
 
-        btn_queue = ttk.Frame(self)
+        btn_queue = ttk.Frame(container)
         btn_queue.pack(fill="x", padx=10, pady=(0, 5))
         ttk.Button(btn_queue, text="Rimuovi", command=self._remove_from_queue).pack(side="left")
         ttk.Button(btn_queue, text="Svuota Coda", command=self._clear_queue).pack(side="left", padx=5)
 
         # ── Controlli ──
-        ctrl_frame = ttk.Frame(self)
+        ctrl_frame = ttk.Frame(container)
         ctrl_frame.pack(fill="x", padx=10, pady=(0, 3))
 
         self.btn_download = ttk.Button(ctrl_frame, text="Scarica Tutti", style="Accent.TButton", command=self._start_download)
@@ -490,7 +525,7 @@ class ScDownloaderApp(tk.Tk):
         ttk.Button(ctrl_frame, text="Sfoglia", command=self._browse_folder).pack(side="left")
 
         # ── Progresso ──
-        progress_frame = ttk.Frame(self)
+        progress_frame = ttk.Frame(container)
         progress_frame.pack(fill="x", padx=10, pady=(0, 3))
 
         self.progress_var = tk.DoubleVar(value=0)
@@ -501,10 +536,10 @@ class ScDownloaderApp(tk.Tk):
         self.status_label.pack(anchor="w", pady=(2, 0))
 
         # ── Storia ──
-        history_label = ttk.Label(self, text="Storia Download", font=("Segoe UI", 10, "bold"))
+        history_label = ttk.Label(container, text="Storia Download", font=("Segoe UI", 10, "bold"))
         history_label.pack(anchor="w", padx=10, pady=(5, 2))
 
-        history_frame = ttk.Frame(self)
+        history_frame = ttk.Frame(container)
         history_frame.pack(fill="x", padx=10, pady=(0, 10))
 
         h_cols = ("data", "titolo", "episodio", "dimensione")
