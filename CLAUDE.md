@@ -4,11 +4,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A single-file Python/Tkinter desktop app (`sc_downloader.py`) that searches StreamingCommunity and downloads
-episodes/movies via scraped vixcloud.co HLS streams, using `yt-dlp` + `ffmpeg`. No package structure, no test
-suite, no build step — everything lives in one ~1100-line file, organized top-to-bottom as:
+A Python/Tkinter desktop app that searches StreamingCommunity and downloads episodes/movies via scraped
+vixcloud.co HLS streams, using `yt-dlp` + `ffmpeg`. No test suite, no build step. Layout:
 
-`StreamingCommunityAPI` → `ScrapeEngine` → `DownloadManager` → `HistoryManager` → `FolderBrowserDialog` → `ScDownloaderApp` (the Tk root) → `main()`.
+```
+main.py                          # entry point: `python main.py`
+sc_downloader/
+    __init__.py                  # verifies curl_cffi is installed (fails fast with a friendly message)
+    __main__.py                  # entry point: `python -m sc_downloader`
+    constants.py                 # BASE_URL, USER_AGENT, ROOT_DIR, HISTORY_FILE, SETTINGS_FILE
+    api.py                       # StreamingCommunityAPI
+    scraper.py                   # ScrapeEngine
+    history.py                   # HistoryManager
+    download_manager.py          # DownloadManager (the core download/threading logic)
+    folder_dialog.py             # FolderBrowserDialog
+    app.py                       # ScDownloaderApp (the Tk root) + main()
+```
+
+`sc_downloader/` was split out of a single ~1150-line `sc_downloader.py` along its existing class boundaries —
+one module per class, no deeper nesting (no `gui/`/`core/` subpackages). Keep new code in the matching module
+rather than reintroducing a monolith; only `app.py` should import Tkinter widgets from outside `folder_dialog.py`.
 
 ## Commands
 
@@ -17,15 +32,18 @@ suite, no build step — everything lives in one ~1100-line file, organized top-
 python3 -m venv .venv
 ./.venv/bin/pip install -r requirements.txt
 
-# run
-./.venv/bin/python sc_downloader.py
+# run (both are equivalent)
+./.venv/bin/python main.py
+./.venv/bin/python -m sc_downloader
 
 # quick syntax/lint check (no formal linter configured in this repo)
-./.venv/bin/python -c "import ast; ast.parse(open('sc_downloader.py').read())"
-./.venv/bin/pip install pyflakes && ./.venv/bin/python -m pyflakes sc_downloader.py  # then pip uninstall pyflakes
+./.venv/bin/python -c "import ast; ast.parse(open('main.py').read())"
+./.venv/bin/pip install pyflakes && ./.venv/bin/python -m pyflakes main.py sc_downloader/  # then pip uninstall pyflakes
 ```
 
-`ffmpeg` must be on system `PATH` (not pip-installable). `.venv/` is gitignored — recreate it, don't assume it exists.
+`ffmpeg` must be on system `PATH` (not pip-installable). `.venv/` is gitignored — recreate it, don't assume it
+exists. `pyflakes` will flag the `curl_cffi` import in `sc_downloader/__init__.py` as unused — that's expected,
+it's there only to trigger the fail-fast `ImportError` message, not to use the module.
 
 There is no automated test suite. Verification in this repo has been manual: run the app and exercise it, or
 write small standalone scripts that instantiate `DownloadManager`/`StreamingCommunityAPI` directly and print
@@ -76,9 +94,10 @@ this is intentional so downloading seasons across separate sessions doesn't spli
 folder and nested ones. `DownloadManager._resolve_dir()` reuses an existing folder case-insensitively instead
 of creating a duplicate with different casing.
 
-**Two on-disk state files live next to the script** (both gitignored, both optional/self-healing if deleted):
-`.sc_history.json` (completed-download history — still written by `HistoryManager`/`DownloadManager.add()` even
-though the UI panel for it was removed) and `.sc_settings.json` (last-used output folder, read on startup).
+**Two on-disk state files live at the repo root** (`constants.ROOT_DIR`, i.e. one level above `sc_downloader/`;
+both gitignored, both optional/self-healing if deleted): `.sc_history.json` (completed-download history — still
+written by `HistoryManager`/`DownloadManager.add()` even though the UI panel for it was removed) and
+`.sc_settings.json` (last-used output folder, read on startup). `ROOT_DIR` is also the default output folder.
 
 **GUI notes**: single dark (Catppuccin-ish) Tk window via `ttk.Style`. The whole layout is wrapped in a
 scrollable `Canvas` (`ScDownloaderApp._build_ui`) because tiling window managers can size the window shorter

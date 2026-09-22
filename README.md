@@ -24,7 +24,9 @@ pip install -r requirements.txt
 ## Uso
 
 ```bash
-python sc_downloader.py
+python main.py
+# oppure, equivalentemente:
+python -m sc_downloader
 ```
 
 1. Scrivi il nome di un film o serie TV nella barra di ricerca
