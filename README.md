@@ -7,7 +7,7 @@ Scarica video da StreamingCommunity con ricerca integrata e interfaccia grafica.
 - **Ricerca integrata**: Cerca titoli direttamente dall'app
 - **Selettore episodi**: Scegli stagione e episodi da scaricare
 - **Coda download**: Aggiungi piu episodi e scaricali in sequenza
-- **Storia**: Tiene traccia dei download completati
+- **Download parallelo**: video e audio di ogni episodio si scaricano contemporaneamente (poi uniti automaticamente)
 - **Download 1080p**: Scarica in massima qualita disponibile
 
 ## Requisiti
@@ -36,5 +36,6 @@ python sc_downloader.py
 ## Note
 
 - Il programma usa `curl_cffi` per bypassare il fingerprinting TLS di vixcloud.co
-- I download vengono eseguiti tramite `yt-dlp` con `ffmpeg`
-- La storia dei download e salvata in `.sc_history.json`
+- I download vengono eseguiti tramite `yt-dlp` con `ffmpeg`; `pycryptodomex` e' necessaria per gli stream HLS criptati
+- Ogni download completato viene registrato in `.sc_history.json` (non visibile nell'interfaccia)
+- L'ultima cartella di destinazione usata e' salvata in `.sc_settings.json`

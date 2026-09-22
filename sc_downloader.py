@@ -15,8 +15,8 @@ import threading
 import time
 import tkinter as tk
 from datetime import datetime
-from tkinter import filedialog, messagebox, ttk
-from urllib.parse import urljoin, urlparse, parse_qs, urlencode, urlunparse
+from tkinter import messagebox, ttk
+from urllib.parse import urlparse, parse_qs
 
 try:
     from curl_cffi import requests as curl_requests
@@ -27,7 +27,6 @@ except ImportError:
 # ─── Costanti ────────────────────────────────────────────────────────────────
 
 BASE_URL = "https://streamingcommunityz.tax"
-CDN_URL = "https://cdn.streamingcommunityz.tax"
 HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".sc_history.json")
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".sc_settings.json")
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -207,7 +206,6 @@ class DownloadManager:
         item["progress"] = 0
         item["video_progress"] = 0
         item["audio_progress"] = 0
-        item["audio_started"] = False
         self.queue.append(item)
 
     def remove(self, index):
@@ -352,32 +350,37 @@ class DownloadManager:
             s["process"] = subprocess.Popen(cmd, **popen_kwargs)
 
         self._current_processes = [s["process"] for s in streams.values()]
-        item["audio_started"] = True  # video e audio partono insieme
 
         def reader(key, process):
             """Legge l'output di un singolo stream (video o audio) e ne
             aggiorna la percentuale/velocita' in modo indipendente
             dall'altro, dato che ora scaricano in parallelo."""
+            pkey = f"{key}_progress"
+            last_callback = 0.0
             for line in process.stdout:
                 if self._stop_flag:
                     break
 
-                pkey = f"{key}_progress"
+                updated = False
+
                 frag_match = re.search(r"\(frag\s+(\d+)/(\d+)\)", line)
                 if frag_match:
                     n, m = int(frag_match.group(1)), int(frag_match.group(2))
                     if m > 0:
                         item[pkey] = max(item.get(pkey, 0), min(100.0, n / m * 100))
+                        updated = True
                 else:
                     pct_match = re.search(r"\[download\]\s+([\d.]+)%", line)
                     if pct_match:
                         item[pkey] = max(item.get(pkey, 0), min(100.0, float(pct_match.group(1))))
+                        updated = True
 
                 speed_match = re.search(r"at\s+([\d.]+)\s*([KMG])i?B/s", line)
                 if speed_match:
                     value, unit = float(speed_match.group(1)), speed_match.group(2)
                     scale = {"K": 1 / 1024, "M": 1, "G": 1024}[unit]
                     item[f"{key}_speed_mb_s"] = value * scale
+                    updated = True
 
                 # Fallback per il raro caso in cui yt-dlp deleghi questo
                 # stream a ffmpeg (es. crypto non disponibile): usa il tempo
@@ -389,10 +392,19 @@ class DownloadManager:
                     if total_seconds > 0:
                         candidate = min(99.0, (h * 3600 + m2 * 60 + s2) / total_seconds * 100)
                         item[pkey] = max(item.get(pkey, 0), candidate)
+                        updated = True
 
-                item["progress"] = (item.get("video_progress", 0) + item.get("audio_progress", 0)) / 2
-                item["speed_mb_s"] = item.get("video_speed_mb_s", 0) + item.get("audio_speed_mb_s", 0)
-                self.progress_callback(self._overall_progress())
+                # Con 8 frammenti concorrenti per stream le righe possono
+                # arrivare molto piu' spesso di quanto serva aggiornare la
+                # UI: limitiamo le notifiche a ~10/s per non intasare il
+                # loop di Tkinter (i valori restano comunque aggiornati,
+                # solo la notifica e' limitata).
+                now = time.monotonic()
+                if updated and now - last_callback >= 0.1:
+                    last_callback = now
+                    item["progress"] = (item.get("video_progress", 0) + item.get("audio_progress", 0)) / 2
+                    item["speed_mb_s"] = item.get("video_speed_mb_s", 0) + item.get("audio_speed_mb_s", 0)
+                    self.progress_callback(self._overall_progress())
 
             process.wait()
 
@@ -848,7 +860,8 @@ class ScDownloaderApp(tk.Tk):
             results, total = self.api.search(query)
             self.after(0, self._show_results, results, total)
         except Exception as e:
-            self.after(0, lambda: self.search_status.config(text=f"Errore: {e}"))
+            msg = str(e)
+            self.after(0, lambda: self.search_status.config(text=f"Errore: {msg}"))
             self.after(0, lambda: self.btn_search.config(state="normal"))
 
     def _show_results(self, results, total):
@@ -876,7 +889,8 @@ class ScDownloaderApp(tk.Tk):
             results, total = self.api.search(query, page)
             self.after(0, self._show_results, results, total)
         except Exception as e:
-            self.after(0, lambda: self.search_status.config(text=f"Errore: {e}"))
+            msg = str(e)
+            self.after(0, lambda: self.search_status.config(text=f"Errore: {msg}"))
 
     # ── Selezione Titolo ─────────────────────────────────────────────────────
 
@@ -897,7 +911,8 @@ class ScDownloaderApp(tk.Tk):
             data = self.api.get_title(title["id"], title["slug"])
             self.after(0, self._show_title_data, data)
         except Exception as e:
-            self.after(0, lambda: self.ep_title_label.config(text=f"Errore: {e}"))
+            msg = str(e)
+            self.after(0, lambda: self.ep_title_label.config(text=f"Errore: {msg}"))
 
     def _show_title_data(self, data):
         if not data:
@@ -931,7 +946,8 @@ class ScDownloaderApp(tk.Tk):
             episodes = self.api.get_season(title_id, slug, season_num)
             self.after(0, self._show_episodes, episodes, season_num)
         except Exception as e:
-            self.after(0, lambda: self.episodes_listbox.insert(0, f"Errore: {e}"))
+            msg = str(e)
+            self.after(0, lambda: self.episodes_listbox.insert(0, f"Errore: {msg}"))
 
     def _show_episodes(self, episodes, season_num):
         self.episodes_listbox.delete(0, "end")
@@ -979,8 +995,6 @@ class ScDownloaderApp(tk.Tk):
                     "episode_id": ep.get("id", 0),
                     "episode_name": ep.get("name", ""),
                     "duration": ep.get("duration", 0),
-                    "status": "in_coda",
-                    "progress": 0,
                 })
         self._refresh_queue()
 
@@ -1016,15 +1030,11 @@ class ScDownloaderApp(tk.Tk):
         filled = int(round(pct / 100 * width))
         bar = "█" * filled + "░" * (width - filled)
 
-        # Video e audio sono stream separati scaricati in sequenza: mostrarli
-        # distintamente evita che la percentuale sembri "bloccata" mentre il
-        # video e' gia' finito e l'audio sta ancora scaricando.
+        # Video e audio sono stream separati scaricati in parallelo, ognuno
+        # con la propria percentuale: mostrarli distintamente evita che il
+        # progresso sembri "bloccato" quando uno dei due arriva prima al 100%.
         if status == "in_corso":
-            video_pct = item.get("video_progress", 0)
-            if item.get("audio_started"):
-                text = f"{bar} V:{video_pct:.0f}% A:{item.get('audio_progress', 0):.0f}%"
-            else:
-                text = f"{bar} V:{video_pct:.0f}%"
+            text = f"{bar} V:{item.get('video_progress', 0):.0f}% A:{item.get('audio_progress', 0):.0f}%"
         else:
             text = f"{bar} {pct:.0f}%"
 
