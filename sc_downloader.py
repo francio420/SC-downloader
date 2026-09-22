@@ -344,7 +344,8 @@ class DownloadManager:
                 # ffmpeg come downloader esterno: niente righe "[download] X%",
                 # solo lo stato di ffmpeg ("time=..." e "size=..."). Calcoliamo
                 # la percentuale rispetto alla durata nota dell'episodio.
-                ff_size_match = re.search(r"size=\s*(\d+)kB", line)
+                # ffmpeg >= 4.x usa "KiB", le versioni precedenti "kB": accetta entrambe.
+                ff_size_match = re.search(r"size=\s*(\d+)\s*ki?b", line, re.IGNORECASE)
                 if ff_size_match:
                     item["size_mb"] = int(ff_size_match.group(1)) / 1024
                     updated = True
@@ -696,16 +697,14 @@ class ScDownloaderApp(tk.Tk):
         queue_frame = ttk.Frame(container)
         queue_frame.pack(fill="both", expand=True, padx=10, pady=(0, 3))
 
-        cols = ("titolo", "stato", "progresso", "peso")
+        cols = ("titolo", "stato", "progresso")
         self.queue_tree = ttk.Treeview(queue_frame, columns=cols, show="headings", height=5)
         self.queue_tree.heading("titolo", text="Titolo")
         self.queue_tree.heading("stato", text="Stato")
         self.queue_tree.heading("progresso", text="Progresso")
-        self.queue_tree.heading("peso", text="Peso")
         self.queue_tree.column("titolo", width=280)
         self.queue_tree.column("stato", width=100)
-        self.queue_tree.column("progresso", width=140, anchor="center")
-        self.queue_tree.column("peso", width=80, anchor="center")
+        self.queue_tree.column("progresso", width=190, anchor="center")
         self.queue_tree.pack(side="left", fill="both", expand=True)
 
         q_scroll = ttk.Scrollbar(queue_frame, orient="vertical", command=self.queue_tree.yview)
@@ -955,16 +954,11 @@ class ScDownloaderApp(tk.Tk):
             return ""
         filled = int(round(pct / 100 * width))
         bar = "█" * filled + "░" * (width - filled)
-        return f"{bar} {pct:.0f}%"
-
-    @staticmethod
-    def _weight_text(item):
-        if item["status"] not in ("in_corso", "completato"):
-            return ""
+        text = f"{bar} {pct:.0f}%"
         size_mb = item.get("size_mb", 0)
-        if not size_mb:
-            return ""
-        return f"{size_mb:.1f} MB"
+        if size_mb:
+            text += f" ({size_mb:.1f} MB)"
+        return text
 
     def _refresh_queue(self):
         """Ricostruisce l'intera lista (usata quando cambia il numero di elementi)."""
@@ -974,22 +968,19 @@ class ScDownloaderApp(tk.Tk):
             title = f"{item['title_name']} S{item['season']:02d}E{item['episode']:02d} - {item.get('episode_name', '')}"
             status = self.STATUS_LABELS.get(item["status"], item["status"])
             bar = self._mini_progress_bar(item)
-            weight = self._weight_text(item)
-            row_id = self.queue_tree.insert("", "end", values=(title, status, bar, weight))
+            row_id = self.queue_tree.insert("", "end", values=(title, status, bar))
             self.queue_row_ids.append(row_id)
 
     def _update_queue_progress(self):
-        """Aggiorna stato/barra/peso delle righe esistenti senza ricrearle (niente flicker)."""
+        """Aggiorna stato/barra delle righe esistenti senza ricrearle (niente flicker)."""
         if len(self.queue_row_ids) != len(self.download_manager.queue):
             self._refresh_queue()
             return
         for row_id, item in zip(self.queue_row_ids, self.download_manager.queue):
             status = self.STATUS_LABELS.get(item["status"], item["status"])
             bar = self._mini_progress_bar(item)
-            weight = self._weight_text(item)
             self.queue_tree.set(row_id, "stato", status)
             self.queue_tree.set(row_id, "progresso", bar)
-            self.queue_tree.set(row_id, "peso", weight)
 
     # ── Download ─────────────────────────────────────────────────────────────
 
