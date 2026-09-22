@@ -21,6 +21,14 @@ Scarica video da StreamingCommunity con ricerca integrata e interfaccia grafica.
 pip install -r requirements.txt
 ```
 
+### Windows (avvio rapido)
+
+In alternativa, su Windows basta fare doppio click su `avvia.bat`: alla prima
+esecuzione crea l'ambiente virtuale e installa le dipendenze da solo, poi
+avvia il programma (nelle esecuzioni successive lo avvia direttamente). Serve
+comunque Python 3.10+ installato e ffmpeg nel PATH: `avvia.bat` avvisa se
+manca uno dei due.
+
 ## Uso
 
 ```bash

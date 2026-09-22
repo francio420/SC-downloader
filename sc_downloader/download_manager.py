@@ -16,6 +16,8 @@ from .scraper import ScrapeEngine
 
 # ─── DownloadManager ─────────────────────────────────────────────────────────
 
+IS_WINDOWS = os.name == "nt"
+
 
 class DownloadManager:
     """Gestisce la coda di download con threading."""
@@ -48,7 +50,16 @@ class DownloadManager:
         for process in processes:
             if process and process.poll() is None:
                 try:
-                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                    if IS_WINDOWS:
+                        # os.killpg non esiste su Windows: taskkill /T termina
+                        # l'intero albero di processi (compresi eventuali figli
+                        # come ffmpeg), equivalente a killpg su POSIX.
+                        subprocess.run(
+                            ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                            capture_output=True,
+                        )
+                    else:
+                        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
                 except (ProcessLookupError, PermissionError, OSError):
                     process.kill()
 
@@ -216,8 +227,14 @@ class DownloadManager:
         popen_kwargs = dict(
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             encoding="utf-8", errors="replace", bufsize=1,
-            start_new_session=True,  # permette di terminare anche i figli (es. ffmpeg) come gruppo
         )
+        if IS_WINDOWS:
+            # start_new_session (setsid) e' POSIX-only; su Windows un nuovo
+            # gruppo di processi si crea cosi', ed e' quanto serve a
+            # kill_current() per usare taskkill /T sull'intero albero.
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            popen_kwargs["start_new_session"] = True  # permette di terminare anche i figli (es. ffmpeg) come gruppo
 
         def cleanup_partial_files():
             """Rimuove eventuali file .video./.audio. parziali di un tentativo
