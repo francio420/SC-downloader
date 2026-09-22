@@ -7,6 +7,7 @@ Scarica video da StreamingCommunity con interfaccia grafica tkinter.
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import threading
@@ -27,6 +28,7 @@ except ImportError:
 BASE_URL = "https://streamingcommunityz.tax"
 CDN_URL = "https://cdn.streamingcommunityz.tax"
 HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".sc_history.json")
+SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".sc_settings.json")
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
 
@@ -181,9 +183,21 @@ class DownloadManager:
         self.current_index = -1
         self.is_downloading = False
         self._stop_flag = False
+        self._current_process = None
         self.api = StreamingCommunityAPI()
         self.scrape = ScrapeEngine(session=self.api.session)
         self.history = HistoryManager()
+
+    def kill_current(self):
+        """Termina immediatamente il download in corso (yt-dlp e i suoi processi
+        figli, es. ffmpeg), evitando che restino orfani in background."""
+        self._stop_flag = True
+        process = self._current_process
+        if process and process.poll() is None:
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                process.kill()
 
     def add(self, item):
         """Aggiunge un episodio alla coda. item = {title_name, season, episode, episode_name, scws_id, duration}"""
@@ -213,6 +227,7 @@ class DownloadManager:
         thread.start()
 
     def _download_loop(self):
+        total = len(self.queue)
         for i, item in enumerate(self.queue):
             if self._stop_flag:
                 break
@@ -220,7 +235,10 @@ class DownloadManager:
                 continue
             self.current_index = i
             item["status"] = "in_corso"
-            self.status_callback(f"Download {item['title_name']} S{item['season']:02d}E{item['episode']:02d}...")
+            self.status_callback(
+                f"Episodio {i + 1}/{total} - {item['title_name']} S{item['season']:02d}E{item['episode']:02d}..."
+            )
+            self.progress_callback(self._overall_progress())
             try:
                 self._download_one(item)
                 item["status"] = "completato"
@@ -238,9 +256,30 @@ class DownloadManager:
                 item["status"] = "errore"
                 item["error"] = str(e)
                 self.status_callback(f"Errore: {e}")
+            self.progress_callback(self._overall_progress())
         self.is_downloading = False
         self.current_index = -1
         self.finished_callback()
+
+    def _overall_progress(self):
+        """Percentuale complessiva su tutti gli elementi in coda."""
+        if not self.queue:
+            return 0
+        return sum(i.get("progress", 0) for i in self.queue) / len(self.queue)
+
+    @staticmethod
+    def _resolve_dir(parent, name):
+        """Riusa una sottocartella di 'parent' gia' esistente con lo stesso nome
+        (case-insensitive) invece di crearne una nuova; altrimenti la crea."""
+        try:
+            for entry in os.listdir(parent):
+                if entry.lower() == name.lower() and os.path.isdir(os.path.join(parent, entry)):
+                    return os.path.join(parent, entry)
+        except OSError:
+            pass
+        path = os.path.join(parent, name)
+        os.makedirs(path, exist_ok=True)
+        return path
 
     def _download_one(self, item):
         m3u8_url = self.scrape.build_m3u8(item["title_id"], item["episode_id"])
@@ -249,10 +288,20 @@ class DownloadManager:
         filename = f"{safe_name}_S{item['season']:02d}E{item['episode']:02d}"
         item["filename"] = filename
 
-        output_template = os.path.join(self.output_folder, f"{filename}.%(ext)s")
+        # Cartella <output>/<Serie>/, con sottocartella <Stagione NN> se in coda
+        # ci sono episodi di piu' stagioni per lo stesso titolo. Riusa cartelle
+        # gia' esistenti (anche con maiuscole/minuscole diverse) invece di
+        # duplicarle.
+        dest_dir = self._resolve_dir(self.output_folder, safe_name)
+        seasons_for_title = {i["season"] for i in self.queue if i.get("title_id") == item.get("title_id")}
+        if len(seasons_for_title) > 1:
+            dest_dir = self._resolve_dir(dest_dir, f"Stagione {item['season']:02d}")
+
+        output_template = os.path.join(dest_dir, f"{filename}.%(ext)s")
 
         cmd = [
-            sys.executable, "-m", "yt_dlp",
+            sys.executable, "-u", "-m", "yt_dlp",
+            "--newline",
             "--referer", "https://vixcloud.co/",
             "--add-header", "Origin:https://vixcloud.co",
             "--impersonate", "chrome",
@@ -267,25 +316,53 @@ class DownloadManager:
             text=True,
             encoding="utf-8",
             errors="replace",
+            bufsize=1,
+            start_new_session=True,  # permette di terminare anche i figli (es. ffmpeg) come gruppo
         )
+        self._current_process = process
 
-        for line in process.stdout:
-            if self._stop_flag:
-                process.kill()
-                break
+        try:
+            for line in process.stdout:
+                if self._stop_flag:
+                    self.kill_current()
+                    break
 
-            # Parsing progresso da yt-dlp
-            pct_match = re.search(r"\[download\]\s+([\d.]+)%", line)
-            if pct_match:
-                pct = float(pct_match.group(1))
-                item["progress"] = pct
-                self.progress_callback(pct)
+                updated = False
 
-            size_match = re.search(r"\[download\]\s+([\d.]+)MiB", line)
-            if size_match:
-                item["size_mb"] = float(size_match.group(1))
+                # Parsing progresso/peso da yt-dlp (downloader nativo)
+                pct_match = re.search(r"\[download\]\s+([\d.]+)%", line)
+                if pct_match:
+                    item["progress"] = float(pct_match.group(1))
+                    updated = True
 
-        process.wait()
+                size_match = re.search(r"\[download\]\s+([\d.]+)MiB", line)
+                if size_match:
+                    item["size_mb"] = float(size_match.group(1))
+                    updated = True
+
+                # Per gli stream HLS di vixcloud.co yt-dlp delega il download a
+                # ffmpeg come downloader esterno: niente righe "[download] X%",
+                # solo lo stato di ffmpeg ("time=..." e "size=..."). Calcoliamo
+                # la percentuale rispetto alla durata nota dell'episodio.
+                ff_size_match = re.search(r"size=\s*(\d+)kB", line)
+                if ff_size_match:
+                    item["size_mb"] = int(ff_size_match.group(1)) / 1024
+                    updated = True
+
+                time_match = re.search(r"time=(\d+):(\d{2}):(\d{2})\.\d+", line)
+                if time_match and item.get("duration"):
+                    h, m, s = (int(g) for g in time_match.groups())
+                    total_seconds = item["duration"] * 60
+                    if total_seconds > 0:
+                        item["progress"] = min(99.0, (h * 3600 + m * 60 + s) / total_seconds * 100)
+                        updated = True
+
+                if updated:
+                    self.progress_callback(self._overall_progress())
+
+            process.wait()
+        finally:
+            self._current_process = None
 
         if process.returncode != 0 and not self._stop_flag:
             raise Exception(f"yt-dlp exit code {process.returncode}")
@@ -325,6 +402,106 @@ class HistoryManager:
         self._save()
 
 
+# ─── FolderBrowserDialog ─────────────────────────────────────────────────────
+
+class FolderBrowserDialog:
+    """Selettore di cartelle con lo stesso tema scuro del resto dell'app,
+    al posto del dialogo nativo del sistema operativo."""
+
+    def __init__(self, parent, start_dir):
+        self.result = None
+        self.current_dir = start_dir
+
+        self.top = tk.Toplevel(parent)
+        self.top.title("Scegli cartella di destinazione")
+        self.top.configure(bg="#1e1e2e")
+        self.top.geometry("560x420")
+        self.top.minsize(420, 300)
+        self.top.transient(parent)
+        self.top.grab_set()
+
+        path_frame = ttk.Frame(self.top)
+        path_frame.pack(fill="x", padx=10, pady=10)
+        ttk.Label(path_frame, text="Percorso:").pack(side="left", padx=(0, 5))
+        self.path_var = tk.StringVar()
+        path_entry = ttk.Entry(path_frame, textvariable=self.path_var)
+        path_entry.pack(side="left", fill="x", expand=True)
+        path_entry.bind("<Return>", self._go_to_typed_path)
+
+        list_frame = ttk.Frame(self.top)
+        list_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+        list_scroll = ttk.Scrollbar(list_frame)
+        list_scroll.pack(side="right", fill="y")
+
+        self.listbox = tk.Listbox(
+            list_frame, bg="#313244", fg="#cdd6f4",
+            selectbackground="#585b70", selectforeground="#cdd6f4",
+            font=("Segoe UI", 10), activestyle="none", borderwidth=0,
+            highlightthickness=1, highlightcolor="#45475a",
+            yscrollcommand=list_scroll.set,
+        )
+        self.listbox.pack(side="left", fill="both", expand=True)
+        list_scroll.config(command=self.listbox.yview)
+        self.listbox.bind("<Double-Button-1>", self._on_double_click)
+        self.listbox.bind("<Return>", self._on_double_click)
+
+        btn_frame = ttk.Frame(self.top)
+        btn_frame.pack(fill="x", padx=10, pady=(0, 10))
+        ttk.Button(btn_frame, text="Su", command=self._go_up).pack(side="left")
+        ttk.Button(btn_frame, text="Annulla", command=self._cancel).pack(side="right")
+        ttk.Button(btn_frame, text="Seleziona questa cartella", style="Accent.TButton",
+                   command=self._confirm).pack(side="right", padx=5)
+
+        self.top.protocol("WM_DELETE_WINDOW", self._cancel)
+        self._refresh(start_dir)
+
+    def _refresh(self, path):
+        try:
+            subdirs = sorted(
+                (e for e in os.listdir(path) if not e.startswith(".") and os.path.isdir(os.path.join(path, e))),
+                key=str.lower,
+            )
+        except OSError:
+            subdirs = []
+        self.current_dir = path
+        self.path_var.set(path)
+        self.listbox.delete(0, "end")
+        for name in subdirs:
+            self.listbox.insert("end", f"📁 {name}")
+
+    def _go_to_typed_path(self, event=None):
+        path = self.path_var.get().strip()
+        if os.path.isdir(path):
+            self._refresh(path)
+
+    def _go_up(self):
+        parent = os.path.dirname(self.current_dir.rstrip(os.sep))
+        if parent and os.path.isdir(parent):
+            self._refresh(parent)
+
+    def _on_double_click(self, event=None):
+        sel = self.listbox.curselection()
+        if not sel:
+            return
+        name = self.listbox.get(sel[0])[2:].strip()
+        new_path = os.path.join(self.current_dir, name)
+        if os.path.isdir(new_path):
+            self._refresh(new_path)
+
+    def _confirm(self):
+        self.result = self.current_dir
+        self.top.destroy()
+
+    def _cancel(self):
+        self.result = None
+        self.top.destroy()
+
+    def show(self):
+        self.top.wait_window()
+        return self.result
+
+
 # ─── ScDownloaderApp ─────────────────────────────────────────────────────────
 
 class ScDownloaderApp(tk.Tk):
@@ -341,11 +518,41 @@ class ScDownloaderApp(tk.Tk):
         self.api = None
         self.current_results = []
         self.current_title_data = None
-        self.output_folder = os.path.dirname(os.path.abspath(__file__))
+        self.queue_row_ids = []
+        self.output_folder = self._load_output_folder()
 
         self._setup_styles()
         self._build_ui()
         self._update_history()
+
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _on_close(self):
+        if self.download_manager and self.download_manager.is_downloading:
+            if not messagebox.askyesno(
+                "Download in corso",
+                "Un download è in corso. Chiudendo il programma verrà interrotto. Continuare?",
+            ):
+                return
+            self.download_manager.kill_current()
+        self.destroy()
+
+    def _load_output_folder(self):
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                folder = json.load(f).get("output_folder")
+            if folder and os.path.isdir(folder):
+                return folder
+        except (OSError, json.JSONDecodeError):
+            pass
+        return os.path.dirname(os.path.abspath(__file__))
+
+    def _save_output_folder(self):
+        try:
+            with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+                json.dump({"output_folder": self.output_folder}, f)
+        except OSError:
+            pass
 
     def _setup_styles(self):
         style = ttk.Style()
@@ -489,14 +696,16 @@ class ScDownloaderApp(tk.Tk):
         queue_frame = ttk.Frame(container)
         queue_frame.pack(fill="both", expand=True, padx=10, pady=(0, 3))
 
-        cols = ("titolo", "stato", "progresso")
+        cols = ("titolo", "stato", "progresso", "peso")
         self.queue_tree = ttk.Treeview(queue_frame, columns=cols, show="headings", height=5)
         self.queue_tree.heading("titolo", text="Titolo")
         self.queue_tree.heading("stato", text="Stato")
-        self.queue_tree.heading("progresso", text="%")
-        self.queue_tree.column("titolo", width=350)
-        self.queue_tree.column("stato", width=120)
-        self.queue_tree.column("progresso", width=60, anchor="center")
+        self.queue_tree.heading("progresso", text="Progresso")
+        self.queue_tree.heading("peso", text="Peso")
+        self.queue_tree.column("titolo", width=280)
+        self.queue_tree.column("stato", width=100)
+        self.queue_tree.column("progresso", width=140, anchor="center")
+        self.queue_tree.column("peso", width=80, anchor="center")
         self.queue_tree.pack(side="left", fill="both", expand=True)
 
         q_scroll = ttk.Scrollbar(queue_frame, orient="vertical", command=self.queue_tree.yview)
@@ -528,9 +737,15 @@ class ScDownloaderApp(tk.Tk):
         progress_frame = ttk.Frame(container)
         progress_frame.pack(fill="x", padx=10, pady=(0, 3))
 
+        progress_row = ttk.Frame(progress_frame)
+        progress_row.pack(fill="x")
+
         self.progress_var = tk.DoubleVar(value=0)
-        self.progress_bar = ttk.Progressbar(progress_frame, variable=self.progress_var, maximum=100, mode="determinate")
-        self.progress_bar.pack(fill="x")
+        self.progress_bar = ttk.Progressbar(progress_row, variable=self.progress_var, maximum=100, mode="determinate")
+        self.progress_bar.pack(side="left", fill="x", expand=True)
+
+        self.overall_pct_label = ttk.Label(progress_row, text="0%", width=5, anchor="e")
+        self.overall_pct_label.pack(side="left", padx=(5, 0))
 
         self.status_label = ttk.Label(progress_frame, text="Pronto", foreground="#a6adc8")
         self.status_label.pack(anchor="w", pady=(2, 0))
@@ -722,19 +937,59 @@ class ScDownloaderApp(tk.Tk):
         self.download_manager.clear()
         self._refresh_queue()
 
+    STATUS_LABELS = {
+        "in_coda": "In coda",
+        "in_corso": "In corso...",
+        "completato": "Completato",
+        "errore": "Errore",
+    }
+
+    @staticmethod
+    def _mini_progress_bar(item, width=10):
+        status = item["status"]
+        if status == "completato":
+            pct = 100
+        elif status == "in_corso":
+            pct = item.get("progress", 0)
+        else:
+            return ""
+        filled = int(round(pct / 100 * width))
+        bar = "█" * filled + "░" * (width - filled)
+        return f"{bar} {pct:.0f}%"
+
+    @staticmethod
+    def _weight_text(item):
+        if item["status"] not in ("in_corso", "completato"):
+            return ""
+        size_mb = item.get("size_mb", 0)
+        if not size_mb:
+            return ""
+        return f"{size_mb:.1f} MB"
+
     def _refresh_queue(self):
+        """Ricostruisce l'intera lista (usata quando cambia il numero di elementi)."""
         self.queue_tree.delete(*self.queue_tree.get_children())
-        for i, item in enumerate(self.download_manager.queue):
+        self.queue_row_ids = []
+        for item in self.download_manager.queue:
             title = f"{item['title_name']} S{item['season']:02d}E{item['episode']:02d} - {item.get('episode_name', '')}"
-            status_map = {
-                "in_coda": "In coda",
-                "in_corso": "In corso...",
-                "completato": "Completato",
-                "errore": "Errore",
-            }
-            status = status_map.get(item["status"], item["status"])
-            pct = f"{item['progress']:.0f}%" if item["status"] == "in_corso" else ("100%" if item["status"] == "completato" else "")
-            self.queue_tree.insert("", "end", values=(title, status, pct))
+            status = self.STATUS_LABELS.get(item["status"], item["status"])
+            bar = self._mini_progress_bar(item)
+            weight = self._weight_text(item)
+            row_id = self.queue_tree.insert("", "end", values=(title, status, bar, weight))
+            self.queue_row_ids.append(row_id)
+
+    def _update_queue_progress(self):
+        """Aggiorna stato/barra/peso delle righe esistenti senza ricrearle (niente flicker)."""
+        if len(self.queue_row_ids) != len(self.download_manager.queue):
+            self._refresh_queue()
+            return
+        for row_id, item in zip(self.queue_row_ids, self.download_manager.queue):
+            status = self.STATUS_LABELS.get(item["status"], item["status"])
+            bar = self._mini_progress_bar(item)
+            weight = self._weight_text(item)
+            self.queue_tree.set(row_id, "stato", status)
+            self.queue_tree.set(row_id, "progresso", bar)
+            self.queue_tree.set(row_id, "peso", weight)
 
     # ── Download ─────────────────────────────────────────────────────────────
 
@@ -752,7 +1007,7 @@ class ScDownloaderApp(tk.Tk):
         self.download_manager.start_all()
 
     def _stop_download(self):
-        self.download_manager._stop_flag = True
+        self.download_manager.kill_current()
         self.btn_download.config(state="normal")
         self.btn_stop.config(state="disabled")
 
@@ -764,10 +1019,12 @@ class ScDownloaderApp(tk.Tk):
     # ── Cartella ─────────────────────────────────────────────────────────────
 
     def _browse_folder(self):
-        folder = filedialog.askdirectory(initialdir=self.output_folder)
+        start_dir = self.output_folder if os.path.isdir(self.output_folder) else os.path.expanduser("~")
+        folder = FolderBrowserDialog(self, start_dir).show()
         if folder:
             self.output_folder = folder
             self.folder_var.set(folder)
+            self._save_output_folder()
 
     # ── Storia ───────────────────────────────────────────────────────────────
 
@@ -787,7 +1044,8 @@ class ScDownloaderApp(tk.Tk):
 
     def _progress_callback(self, pct):
         self.after(0, lambda: self.progress_var.set(pct))
-        self.after(0, self._refresh_queue)
+        self.after(0, lambda: self.overall_pct_label.config(text=f"{pct:.0f}%"))
+        self.after(0, self._update_queue_progress)
 
     def _status_callback(self, msg):
         self.after(0, lambda: self.status_label.config(text=msg))

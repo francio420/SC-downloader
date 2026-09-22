@@ -3,6 +3,8 @@ __pycache__/
 *.pyo
 *.exe
 .sc_history.json
+.sc_settings.json
+.venv/
 *.mp4
 *.part
 *.temp
