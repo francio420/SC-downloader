@@ -6,9 +6,11 @@ import subprocess
 import sys
 import threading
 import time
+from collections import deque
 from datetime import datetime
 
 from .api import StreamingCommunityAPI
+from .constants import DEBUG_LOG_FILE
 from .history import HistoryManager
 from .scraper import ScrapeEngine
 
@@ -136,6 +138,26 @@ class DownloadManager:
         os.makedirs(path, exist_ok=True)
         return path
 
+    @staticmethod
+    def _log_failure(item, cmds, outputs, extra=""):
+        """Scrive un log dettagliato di un download fallito (comandi eseguiti,
+        codici di uscita, output completo di yt-dlp/ffmpeg) in DEBUG_LOG_FILE,
+        cosi' l'errore si puo' diagnosticare senza doverlo riprodurre a mano."""
+        try:
+            with open(DEBUG_LOG_FILE, "a", encoding="utf-8") as f:
+                f.write("=" * 80 + "\n")
+                f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - "
+                        f"{item.get('title_name')} S{item.get('season', 0):02d}E{item.get('episode', 0):02d}\n")
+                for label, cmd in cmds.items():
+                    f.write(f"\n[{label}] comando:\n  {' '.join(cmd)}\n")
+                for label, output in outputs.items():
+                    f.write(f"\n[{label}] output:\n{output}\n")
+                if extra:
+                    f.write(f"\n{extra}\n")
+                f.write("=" * 80 + "\n\n")
+        except OSError:
+            pass
+
     def _download_one(self, item):
         m3u8_url = self.scrape.build_m3u8(item["title_id"], item["episode_id"])
 
@@ -191,17 +213,22 @@ class DownloadManager:
         )
         for key, s in streams.items():
             cmd = base_args + ["-f", s["format"], "-o", s["template"], m3u8_url]
+            s["cmd"] = cmd
+            # Ultime 200 righe di output per stream: se il download fallisce,
+            # finiscono nel log di debug invece di andare perse.
+            s["output"] = deque(maxlen=200)
             s["process"] = subprocess.Popen(cmd, **popen_kwargs)
 
         self._current_processes = [s["process"] for s in streams.values()]
 
-        def reader(key, process):
+        def reader(key, process, output_buffer):
             """Legge l'output di un singolo stream (video o audio) e ne
             aggiorna la percentuale/velocita' in modo indipendente
             dall'altro, dato che ora scaricano in parallelo."""
             pkey = f"{key}_progress"
             last_callback = 0.0
             for line in process.stdout:
+                output_buffer.append(line)
                 if self._stop_flag:
                     break
 
@@ -253,7 +280,7 @@ class DownloadManager:
             process.wait()
 
         threads = [
-            threading.Thread(target=reader, args=(key, s["process"]), daemon=True)
+            threading.Thread(target=reader, args=(key, s["process"], s["output"]), daemon=True)
             for key, s in streams.items()
         ]
         for t in threads:
@@ -282,25 +309,35 @@ class DownloadManager:
         if self._stop_flag:
             return
 
+        cmds = {key: s["cmd"] for key, s in streams.items()}
+
         video_rc = streams["video"]["process"].returncode
         audio_rc = streams["audio"]["process"].returncode
         if video_rc != 0 or audio_rc != 0:
-            raise Exception(f"yt-dlp fallito (video={video_rc}, audio={audio_rc})")
+            outputs = {key: "".join(s["output"]) for key, s in streams.items()}
+            self._log_failure(item, cmds, outputs, extra=f"video_rc={video_rc} audio_rc={audio_rc}")
+            raise Exception(
+                f"yt-dlp fallito (video={video_rc}, audio={audio_rc}) - dettagli in {DEBUG_LOG_FILE}"
+            )
 
         video_files = glob.glob(os.path.join(dest_dir, f"{filename}.video.*"))
         audio_files = glob.glob(os.path.join(dest_dir, f"{filename}.audio.*"))
         if not video_files or not audio_files:
-            raise Exception("File video o audio mancante dopo il download")
+            outputs = {key: "".join(s["output"]) for key, s in streams.items()}
+            self._log_failure(item, cmds, outputs, extra="File video o audio mancante dopo il download")
+            raise Exception(f"File video o audio mancante dopo il download - dettagli in {DEBUG_LOG_FILE}")
         video_file, audio_file = video_files[0], audio_files[0]
 
         final_path = os.path.join(dest_dir, f"{filename}.mp4")
-        merge = subprocess.run(
-            ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-             "-i", video_file, "-i", audio_file, "-c", "copy", final_path],
-            capture_output=True, text=True,
-        )
+        merge_cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                     "-i", video_file, "-i", audio_file, "-c", "copy", final_path]
+        merge = subprocess.run(merge_cmd, capture_output=True, text=True)
         if merge.returncode != 0:
-            raise Exception(f"ffmpeg merge fallito: {merge.stderr[-300:]}")
+            self._log_failure(
+                item, {**cmds, "ffmpeg merge": merge_cmd},
+                {"ffmpeg merge (stdout+stderr)": merge.stdout + merge.stderr},
+            )
+            raise Exception(f"ffmpeg merge fallito - dettagli in {DEBUG_LOG_FILE}")
 
         os.remove(video_file)
         os.remove(audio_file)

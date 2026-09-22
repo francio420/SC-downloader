@@ -332,7 +332,7 @@ class ScDownloaderApp(tk.Tk):
         season_numbers = [str(s["number"]) for s in seasons]
         self.season_combo["values"] = season_numbers
         if season_numbers:
-            self.season_var.set(season_numbers[-1])  # Seleziona ultima stagione
+            self.season_var.set(season_numbers[0])  # Seleziona prima stagione
             self._load_season_episodes()
         self.ep_title_label.config(text=data["name"])
 
