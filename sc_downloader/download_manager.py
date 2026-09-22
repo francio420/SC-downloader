@@ -7,11 +7,11 @@ import sys
 import threading
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from .api import StreamingCommunityAPI
 from .constants import DEBUG_LOG_FILE
-from .history import HistoryManager
 from .scraper import ScrapeEngine
 
 # ─── DownloadManager ─────────────────────────────────────────────────────────
@@ -20,26 +20,32 @@ from .scraper import ScrapeEngine
 class DownloadManager:
     """Gestisce la coda di download con threading."""
 
-    def __init__(self, output_folder, progress_callback=None, status_callback=None, finished_callback=None):
+    def __init__(self, output_folder, progress_callback=None, status_callback=None, finished_callback=None,
+                 max_parallel_episodes=2, concurrent_fragments=8):
         self.output_folder = output_folder
         self.progress_callback = progress_callback or (lambda *a: None)
         self.status_callback = status_callback or (lambda *a: None)
         self.finished_callback = finished_callback or (lambda *a: None)
+        self.max_parallel_episodes = max_parallel_episodes
+        self.concurrent_fragments = concurrent_fragments
         self.queue = []
         self.current_index = -1
         self.is_downloading = False
         self._stop_flag = False
         self._current_processes = []
+        self._processes_lock = threading.Lock()
         self.api = StreamingCommunityAPI()
         self.scrape = ScrapeEngine(session=self.api.session)
-        self.history = HistoryManager()
 
     def kill_current(self):
-        """Termina immediatamente il download in corso (video e audio scaricati
-        in parallelo, e i loro eventuali processi figli come ffmpeg), evitando
-        che restino orfani in background."""
+        """Termina immediatamente tutti i download in corso (fino a
+        max_parallel_episodes episodi in parallelo, ognuno con video e audio
+        scaricati a loro volta in parallelo, e i loro eventuali processi
+        figli come ffmpeg), evitando che restino orfani in background."""
         self._stop_flag = True
-        for process in list(self._current_processes):
+        with self._processes_lock:
+            processes = list(self._current_processes)
+        for process in processes:
             if process and process.poll() is None:
                 try:
                     os.killpg(os.getpgid(process.pid), signal.SIGKILL)
@@ -56,7 +62,10 @@ class DownloadManager:
 
     def remove(self, index):
         if 0 <= index < len(self.queue):
-            if index == self.current_index:
+            if self.queue[index]["status"] == "in_corso":
+                # Non e' possibile fermare un solo episodio tra quelli in
+                # parallelo senza toccare gli altri: rimuoverne uno attivo
+                # interrompe l'intero batch, come per il pulsante "Interrompi".
                 self._stop_flag = True
             self.queue.pop(index)
             if self.current_index >= len(self.queue):
@@ -76,17 +85,13 @@ class DownloadManager:
         thread.start()
 
     def _download_loop(self):
-        total = len(self.queue)
-        for i, item in enumerate(self.queue):
+        pending = [item for item in self.queue if item["status"] != "completato"]
+
+        def worker(item):
             if self._stop_flag:
-                break
-            if item["status"] == "completato":
-                continue
-            self.current_index = i
+                return
             item["status"] = "in_corso"
-            self.status_callback(
-                f"Episodio {i + 1}/{total} - {item['title_name']} S{item['season']:02d}E{item['episode']:02d}..."
-            )
+            self.status_callback(self._status_message())
             self.progress_callback(self._overall_progress())
             try:
                 self._download_one(item)
@@ -100,23 +105,29 @@ class DownloadManager:
                 else:
                     item["status"] = "completato"
                     item["progress"] = 100
-                    self.history.add({
-                        "title": item["title_name"],
-                        "season": item["season"],
-                        "episode": item["episode"],
-                        "episode_name": item.get("episode_name", ""),
-                        "filename": item.get("filename", ""),
-                        "size_mb": item.get("size_mb", 0),
-                        "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    })
             except Exception as e:
                 item["status"] = "errore"
                 item["error"] = str(e)
                 self.status_callback(f"Errore: {e}")
+            self.status_callback(self._status_message())
             self.progress_callback(self._overall_progress())
+
+        # Fino a max_parallel_episodes episodi scaricati contemporaneamente;
+        # ognuno a sua volta scarica video e audio in parallelo tra loro.
+        with ThreadPoolExecutor(max_workers=max(1, self.max_parallel_episodes)) as pool:
+            list(pool.map(worker, pending))
+
         self.is_downloading = False
         self.current_index = -1
         self.finished_callback()
+
+    def _status_message(self):
+        active = [i for i in self.queue if i["status"] == "in_corso"]
+        done = sum(1 for i in self.queue if i["status"] == "completato")
+        if not active:
+            return f"{done}/{len(self.queue)} completati"
+        titles = ", ".join(f"{i['title_name']} S{i['season']:02d}E{i['episode']:02d}" for i in active)
+        return f"In corso ({len(active)}): {titles} — {done}/{len(self.queue)} completati"
 
     def _overall_progress(self):
         """Percentuale complessiva su tutti gli elementi in coda."""
@@ -193,7 +204,7 @@ class DownloadManager:
             "--add-header", "Origin:https://vixcloud.co",
             "--impersonate", "chrome",
             "--hls-prefer-native",
-            "--concurrent-fragments", "8",
+            "--concurrent-fragments", str(self.concurrent_fragments),
         ]
         streams = {
             "video": {
@@ -219,7 +230,11 @@ class DownloadManager:
             s["output"] = deque(maxlen=200)
             s["process"] = subprocess.Popen(cmd, **popen_kwargs)
 
-        self._current_processes = [s["process"] for s in streams.values()]
+        # Aggiunge (non sostituisce) alla lista condivisa: con piu' episodi in
+        # parallelo, ognuno ha i propri processi ma la lista/il lock sono
+        # condivisi a livello di DownloadManager per fermarli tutti insieme.
+        with self._processes_lock:
+            self._current_processes.extend(s["process"] for s in streams.values())
 
         def reader(key, process, output_buffer):
             """Legge l'output di un singolo stream (video o audio) e ne
@@ -304,7 +319,10 @@ class DownloadManager:
             t.join(timeout=5)
 
         item["speed_mb_s"] = 0
-        self._current_processes = []
+        with self._processes_lock:
+            for s in streams.values():
+                if s["process"] in self._current_processes:
+                    self._current_processes.remove(s["process"])
 
         if self._stop_flag:
             return

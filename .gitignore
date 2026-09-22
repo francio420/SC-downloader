@@ -2,7 +2,6 @@ __pycache__/
 *.pyc
 *.pyo
 *.exe
-.sc_history.json
 .sc_settings.json
 .venv/
 *.mp4

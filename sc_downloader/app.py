@@ -7,6 +7,7 @@ from tkinter import messagebox, ttk
 from .constants import ROOT_DIR, SETTINGS_FILE
 from .download_manager import DownloadManager
 from .folder_dialog import FolderBrowserDialog
+from .settings_dialog import SettingsDialog
 
 # ─── ScDownloaderApp ─────────────────────────────────────────────────────────
 
@@ -26,9 +27,13 @@ class ScDownloaderApp(tk.Tk):
         self.current_results = []
         self.current_title_data = None
         self.queue_row_ids = []
-        self.output_folder = self._load_output_folder()
+        settings = self._load_settings()
+        self.output_folder = settings["output_folder"]
+        self.max_parallel_episodes = settings["max_parallel_episodes"]
+        self.concurrent_fragments = settings["concurrent_fragments"]
 
         self._setup_styles()
+        self._build_menu()
         self._build_ui()
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -43,22 +48,46 @@ class ScDownloaderApp(tk.Tk):
             self.download_manager.kill_current()
         self.destroy()
 
-    def _load_output_folder(self):
+    def _load_settings(self):
+        defaults = {"output_folder": ROOT_DIR, "max_parallel_episodes": 2, "concurrent_fragments": 8}
         try:
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-                folder = json.load(f).get("output_folder")
-            if folder and os.path.isdir(folder):
-                return folder
+                saved = json.load(f)
         except (OSError, json.JSONDecodeError):
-            pass
-        return ROOT_DIR
+            saved = {}
+        folder = saved.get("output_folder")
+        if folder and os.path.isdir(folder):
+            defaults["output_folder"] = folder
+        for key in ("max_parallel_episodes", "concurrent_fragments"):
+            if isinstance(saved.get(key), int) and saved[key] > 0:
+                defaults[key] = saved[key]
+        return defaults
 
-    def _save_output_folder(self):
+    def _save_settings(self):
         try:
             with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-                json.dump({"output_folder": self.output_folder}, f)
+                json.dump({
+                    "output_folder": self.output_folder,
+                    "max_parallel_episodes": self.max_parallel_episodes,
+                    "concurrent_fragments": self.concurrent_fragments,
+                }, f)
         except OSError:
             pass
+
+    def _build_menu(self):
+        menubar = tk.Menu(self)
+        menubar.add_command(label="Impostazioni", command=self._open_settings)
+        self.config(menu=menubar)
+
+    def _open_settings(self):
+        result = SettingsDialog(self, self.max_parallel_episodes, self.concurrent_fragments).show()
+        if result:
+            self.max_parallel_episodes = result["max_parallel_episodes"]
+            self.concurrent_fragments = result["concurrent_fragments"]
+            self._save_settings()
+            if self.download_manager:
+                self.download_manager.max_parallel_episodes = self.max_parallel_episodes
+                self.download_manager.concurrent_fragments = self.concurrent_fragments
 
     def _setup_styles(self):
         style = ttk.Style()
@@ -509,7 +538,7 @@ class ScDownloaderApp(tk.Tk):
         if folder:
             self.output_folder = folder
             self.folder_var.set(folder)
-            self._save_output_folder()
+            self._save_settings()
 
     # ── Callbacks ────────────────────────────────────────────────────────────
 
@@ -529,6 +558,8 @@ class ScDownloaderApp(tk.Tk):
             progress_callback=self._progress_callback,
             status_callback=self._status_callback,
             finished_callback=self._on_download_finished,
+            max_parallel_episodes=self.max_parallel_episodes,
+            concurrent_fragments=self.concurrent_fragments,
         )
         self.api = self.download_manager.api
 
