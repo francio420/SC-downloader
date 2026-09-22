@@ -212,136 +212,182 @@ class DownloadManager:
             "--hls-prefer-native",
             "--concurrent-fragments", str(concurrent_fragments),
         ]
-        streams = {
-            "video": {
-                "template": os.path.join(dest_dir, f"{filename}.video.%(ext)s"),
-                "format": "bestvideo",
-            },
-            "audio": {
-                "template": os.path.join(dest_dir, f"{filename}.audio.%(ext)s"),
-                "format": "bestaudio",
-            },
-        }
 
         popen_kwargs = dict(
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             encoding="utf-8", errors="replace", bufsize=1,
             start_new_session=True,  # permette di terminare anche i figli (es. ffmpeg) come gruppo
         )
-        for key, s in streams.items():
-            cmd = base_args + ["-f", s["format"], "-o", s["template"], m3u8_url]
-            s["cmd"] = cmd
-            # Ultime 200 righe di output per stream: se il download fallisce,
-            # finiscono nel log di debug invece di andare perse.
-            s["output"] = deque(maxlen=200)
-            s["process"] = subprocess.Popen(cmd, **popen_kwargs)
 
-        # Aggiunge (non sostituisce) alla lista condivisa: con piu' episodi in
-        # parallelo, ognuno ha i propri processi ma la lista/il lock sono
-        # condivisi a livello di DownloadManager per fermarli tutti insieme.
-        with self._processes_lock:
-            self._current_processes.extend(s["process"] for s in streams.values())
+        def cleanup_partial_files():
+            """Rimuove eventuali file .video./.audio. parziali di un tentativo
+            fallito. Necessario prima di ritentare: vixcloud puo' rispondere
+            con errori 503/416 sotto carico (troppi frammenti/episodi
+            paralleli), a quel punto yt-dlp esaurisce i suoi retry interni e
+            puo' anche corrompere lo stato dei frammenti (.part-FragN "No
+            such file"); ripartire da zero evita di ereditare quello stato,
+            invece che lasciare video e audio a meta' scaricati e mai uniti
+            nella cartella di destinazione."""
+            for path in glob.glob(os.path.join(dest_dir, f"{filename}.video.*")):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+            for path in glob.glob(os.path.join(dest_dir, f"{filename}.audio.*")):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
 
-        def reader(key, process, output_buffer):
-            """Legge l'output di un singolo stream (video o audio) e ne
-            aggiorna la percentuale/velocita' in modo indipendente
-            dall'altro, dato che ora scaricano in parallelo."""
-            pkey = f"{key}_progress"
-            last_callback = 0.0
-            for line in process.stdout:
-                output_buffer.append(line)
-                if self._stop_flag:
-                    break
+        MAX_ATTEMPTS = 3
+        streams = None
+        cmds = {}
+        last_outputs = {}
+        last_video_rc = last_audio_rc = None
 
-                updated = False
-
-                frag_match = re.search(r"\(frag\s+(\d+)/(\d+)\)", line)
-                if frag_match:
-                    n, m = int(frag_match.group(1)), int(frag_match.group(2))
-                    if m > 0:
-                        item[pkey] = max(item.get(pkey, 0), min(100.0, n / m * 100))
-                        updated = True
-                else:
-                    pct_match = re.search(r"\[download\]\s+([\d.]+)%", line)
-                    if pct_match:
-                        item[pkey] = max(item.get(pkey, 0), min(100.0, float(pct_match.group(1))))
-                        updated = True
-
-                speed_match = re.search(r"at\s+([\d.]+)\s*([KMG])i?B/s", line)
-                if speed_match:
-                    value, unit = float(speed_match.group(1)), speed_match.group(2)
-                    scale = {"K": 1 / 1024, "M": 1, "G": 1024}[unit]
-                    item[f"{key}_speed_mb_s"] = value * scale
-                    updated = True
-
-                # Fallback per il raro caso in cui yt-dlp deleghi questo
-                # stream a ffmpeg (es. crypto non disponibile): usa il tempo
-                # processato rispetto alla durata nota dell'episodio.
-                time_match = re.search(r"time=(\d+):(\d{2}):(\d{2})\.\d+", line)
-                if time_match and item.get("duration"):
-                    h, m2, s2 = (int(g) for g in time_match.groups())
-                    total_seconds = item["duration"] * 60
-                    if total_seconds > 0:
-                        candidate = min(99.0, (h * 3600 + m2 * 60 + s2) / total_seconds * 100)
-                        item[pkey] = max(item.get(pkey, 0), candidate)
-                        updated = True
-
-                # Con 8 frammenti concorrenti per stream le righe possono
-                # arrivare molto piu' spesso di quanto serva aggiornare la
-                # UI: limitiamo le notifiche a ~10/s per non intasare il
-                # loop di Tkinter (i valori restano comunque aggiornati,
-                # solo la notifica e' limitata).
-                now = time.monotonic()
-                if updated and now - last_callback >= 0.1:
-                    last_callback = now
-                    item["progress"] = (item.get("video_progress", 0) + item.get("audio_progress", 0)) / 2
-                    item["speed_mb_s"] = item.get("video_speed_mb_s", 0) + item.get("audio_speed_mb_s", 0)
-                    self.progress_callback(self._overall_progress())
-
-            process.wait()
-
-        threads = [
-            threading.Thread(target=reader, args=(key, s["process"], s["output"]), daemon=True)
-            for key, s in streams.items()
-        ]
-        for t in threads:
-            t.start()
-
-        last_disk_check = 0.0
-        while any(t.is_alive() for t in threads):
+        for attempt in range(1, MAX_ATTEMPTS + 1):
             if self._stop_flag:
-                self.kill_current()
+                return
+            if attempt > 1:
+                # Breve attesa prima di ritentare (non bloccante rispetto allo
+                # stop): da' tempo al CDN di smettere di limitare le
+                # connessioni invece di ripresentarsi identico subito dopo.
+                for _ in range(20):
+                    if self._stop_flag:
+                        return
+                    time.sleep(0.2)
+                cleanup_partial_files()
+
+            streams = {
+                "video": {
+                    "template": os.path.join(dest_dir, f"{filename}.video.%(ext)s"),
+                    "format": "bestvideo",
+                },
+                "audio": {
+                    "template": os.path.join(dest_dir, f"{filename}.audio.%(ext)s"),
+                    "format": "bestaudio",
+                },
+            }
+            for key, s in streams.items():
+                cmd = base_args + ["-f", s["format"], "-o", s["template"], m3u8_url]
+                s["cmd"] = cmd
+                # Ultime 200 righe di output per stream: se il download fallisce,
+                # finiscono nel log di debug invece di andare perse.
+                s["output"] = deque(maxlen=200)
+                s["process"] = subprocess.Popen(cmd, **popen_kwargs)
+
+            # Aggiunge (non sostituisce) alla lista condivisa: con piu' episodi in
+            # parallelo, ognuno ha i propri processi ma la lista/il lock sono
+            # condivisi a livello di DownloadManager per fermarli tutti insieme.
+            with self._processes_lock:
+                self._current_processes.extend(s["process"] for s in streams.values())
+
+            def reader(key, process, output_buffer):
+                """Legge l'output di un singolo stream (video o audio) e ne
+                aggiorna la percentuale/velocita' in modo indipendente
+                dall'altro, dato che ora scaricano in parallelo."""
+                pkey = f"{key}_progress"
+                last_callback = 0.0
+                for line in process.stdout:
+                    output_buffer.append(line)
+                    if self._stop_flag:
+                        break
+
+                    updated = False
+
+                    frag_match = re.search(r"\(frag\s+(\d+)/(\d+)\)", line)
+                    if frag_match:
+                        n, m = int(frag_match.group(1)), int(frag_match.group(2))
+                        if m > 0:
+                            item[pkey] = max(item.get(pkey, 0), min(100.0, n / m * 100))
+                            updated = True
+                    else:
+                        pct_match = re.search(r"\[download\]\s+([\d.]+)%", line)
+                        if pct_match:
+                            item[pkey] = max(item.get(pkey, 0), min(100.0, float(pct_match.group(1))))
+                            updated = True
+
+                    speed_match = re.search(r"at\s+([\d.]+)\s*([KMG])i?B/s", line)
+                    if speed_match:
+                        value, unit = float(speed_match.group(1)), speed_match.group(2)
+                        scale = {"K": 1 / 1024, "M": 1, "G": 1024}[unit]
+                        item[f"{key}_speed_mb_s"] = value * scale
+                        updated = True
+
+                    # Fallback per il raro caso in cui yt-dlp deleghi questo
+                    # stream a ffmpeg (es. crypto non disponibile): usa il tempo
+                    # processato rispetto alla durata nota dell'episodio.
+                    time_match = re.search(r"time=(\d+):(\d{2}):(\d{2})\.\d+", line)
+                    if time_match and item.get("duration"):
+                        h, m2, s2 = (int(g) for g in time_match.groups())
+                        total_seconds = item["duration"] * 60
+                        if total_seconds > 0:
+                            candidate = min(99.0, (h * 3600 + m2 * 60 + s2) / total_seconds * 100)
+                            item[pkey] = max(item.get(pkey, 0), candidate)
+                            updated = True
+
+                    # Con 8 frammenti concorrenti per stream le righe possono
+                    # arrivare molto piu' spesso di quanto serva aggiornare la
+                    # UI: limitiamo le notifiche a ~10/s per non intasare il
+                    # loop di Tkinter (i valori restano comunque aggiornati,
+                    # solo la notifica e' limitata).
+                    now = time.monotonic()
+                    if updated and now - last_callback >= 0.1:
+                        last_callback = now
+                        item["progress"] = (item.get("video_progress", 0) + item.get("audio_progress", 0)) / 2
+                        item["speed_mb_s"] = item.get("video_speed_mb_s", 0) + item.get("audio_speed_mb_s", 0)
+                        self.progress_callback(self._overall_progress())
+
+                process.wait()
+
+            threads = [
+                threading.Thread(target=reader, args=(key, s["process"], s["output"]), daemon=True)
+                for key, s in streams.items()
+            ]
+            for t in threads:
+                t.start()
+
+            last_disk_check = 0.0
+            while any(t.is_alive() for t in threads):
+                if self._stop_flag:
+                    self.kill_current()
+                    break
+                now = time.monotonic()
+                if now - last_disk_check >= 1.0:
+                    last_disk_check = now
+                    size_mb = disk_size_mb()
+                    if size_mb:
+                        item["size_mb"] = size_mb
+                        self.progress_callback(self._overall_progress())
+                time.sleep(0.2)
+
+            for t in threads:
+                t.join(timeout=5)
+
+            item["speed_mb_s"] = 0
+            with self._processes_lock:
+                for s in streams.values():
+                    if s["process"] in self._current_processes:
+                        self._current_processes.remove(s["process"])
+
+            if self._stop_flag:
+                return
+
+            cmds = {key: s["cmd"] for key, s in streams.items()}
+            last_video_rc = streams["video"]["process"].returncode
+            last_audio_rc = streams["audio"]["process"].returncode
+            if last_video_rc == 0 and last_audio_rc == 0:
                 break
-            now = time.monotonic()
-            if now - last_disk_check >= 1.0:
-                last_disk_check = now
-                size_mb = disk_size_mb()
-                if size_mb:
-                    item["size_mb"] = size_mb
-                    self.progress_callback(self._overall_progress())
-            time.sleep(0.2)
-
-        for t in threads:
-            t.join(timeout=5)
-
-        item["speed_mb_s"] = 0
-        with self._processes_lock:
-            for s in streams.values():
-                if s["process"] in self._current_processes:
-                    self._current_processes.remove(s["process"])
-
-        if self._stop_flag:
-            return
-
-        cmds = {key: s["cmd"] for key, s in streams.items()}
-
-        video_rc = streams["video"]["process"].returncode
-        audio_rc = streams["audio"]["process"].returncode
-        if video_rc != 0 or audio_rc != 0:
-            outputs = {key: "".join(s["output"]) for key, s in streams.items()}
-            self._log_failure(item, cmds, outputs, extra=f"video_rc={video_rc} audio_rc={audio_rc}")
+            last_outputs = {key: "".join(s["output"]) for key, s in streams.items()}
+        else:
+            cleanup_partial_files()
+            self._log_failure(
+                item, cmds, last_outputs,
+                extra=f"video_rc={last_video_rc} audio_rc={last_audio_rc} (dopo {MAX_ATTEMPTS} tentativi)",
+            )
             raise Exception(
-                f"yt-dlp fallito (video={video_rc}, audio={audio_rc}) - dettagli in {DEBUG_LOG_FILE}"
+                f"yt-dlp fallito dopo {MAX_ATTEMPTS} tentativi "
+                f"(video={last_video_rc}, audio={last_audio_rc}) - dettagli in {DEBUG_LOG_FILE}"
             )
 
         def pick_media_file(paths):
