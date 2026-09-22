@@ -49,7 +49,7 @@ class ScDownloaderApp(tk.Tk):
         self.destroy()
 
     def _load_settings(self):
-        defaults = {"output_folder": ROOT_DIR, "max_parallel_episodes": 2, "concurrent_fragments": 8}
+        defaults = {"output_folder": ROOT_DIR, "max_parallel_episodes": 1, "concurrent_fragments": 4}
         try:
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
                 saved = json.load(f)

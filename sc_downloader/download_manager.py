@@ -21,7 +21,7 @@ class DownloadManager:
     """Gestisce la coda di download con threading."""
 
     def __init__(self, output_folder, progress_callback=None, status_callback=None, finished_callback=None,
-                 max_parallel_episodes=2, concurrent_fragments=8):
+                 max_parallel_episodes=1, concurrent_fragments=4):
         self.output_folder = output_folder
         self.progress_callback = progress_callback or (lambda *a: None)
         self.status_callback = status_callback or (lambda *a: None)

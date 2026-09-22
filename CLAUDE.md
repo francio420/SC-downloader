@@ -59,11 +59,11 @@ markup changes by design — there's no stable API contract to rely on.
 
 **Video and audio are separate HLS renditions on this CDN**, not a single muxed stream. `DownloadManager`
 therefore launches **two parallel `yt-dlp` subprocesses** per episode (`-f bestvideo` / `-f bestaudio`, both with
-`--hls-prefer-native --concurrent-fragments N`, `N` = `DownloadManager.concurrent_fragments`, default 8), and
+`--hls-prefer-native --concurrent-fragments N`, `N` = `DownloadManager.concurrent_fragments`, default 4), and
 once both exit 0, muxes them itself with a plain `ffmpeg -c copy`. Requires `--impersonate chrome`
 (curl_cffi/yt-dlp TLS impersonation) to get past vixcloud's fingerprinting.
 
-**Multiple episodes can also download in parallel** (`DownloadManager.max_parallel_episodes`, default 2, user
+**Multiple episodes can also download in parallel** (`DownloadManager.max_parallel_episodes`, default 1, user
 configurable via the Settings dialog): `_download_loop` runs pending queue items through a
 `ThreadPoolExecutor(max_workers=max_parallel_episodes)` instead of a sequential loop. Because of this,
 `self._current_processes` (the list `kill_current()` kills to stop everything) is a **shared, lock-protected**
