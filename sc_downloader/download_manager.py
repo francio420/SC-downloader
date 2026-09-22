@@ -188,6 +188,10 @@ class DownloadManager:
 
     def _download_one(self, item, concurrent_fragments):
         m3u8_url = self.scrape.build_m3u8(item["title_id"], item["episode_id"])
+        # Di solito video e audio sono rendition HLS separate, ma per alcuni
+        # titoli il CDN offre solo stream gia' muxati: li' "bestvideo"/
+        # "bestaudio" non trovano nulla e si scarica un unico stream "best".
+        muxed = not self.scrape.has_separate_audio(m3u8_url)
 
         safe_name = re.sub(r'[<>:"/\\|?*]', '_', item["title_name"])
         filename = f"{safe_name}_S{item['season']:02d}E{item['episode']:02d}"
@@ -275,16 +279,24 @@ class DownloadManager:
                     time.sleep(0.2)
                 cleanup_partial_files()
 
-            streams = {
-                "video": {
-                    "template": os.path.join(dest_dir, f"{filename}.video.%(ext)s"),
-                    "format": "bestvideo",
-                },
-                "audio": {
-                    "template": os.path.join(dest_dir, f"{filename}.audio.%(ext)s"),
-                    "format": "bestaudio",
-                },
-            }
+            if muxed:
+                streams = {
+                    "video": {
+                        "template": os.path.join(dest_dir, f"{filename}.video.%(ext)s"),
+                        "format": "best",
+                    },
+                }
+            else:
+                streams = {
+                    "video": {
+                        "template": os.path.join(dest_dir, f"{filename}.video.%(ext)s"),
+                        "format": "bestvideo",
+                    },
+                    "audio": {
+                        "template": os.path.join(dest_dir, f"{filename}.audio.%(ext)s"),
+                        "format": "bestaudio",
+                    },
+                }
             for key, s in streams.items():
                 cmd = base_args + ["-f", s["format"], "-o", s["template"], m3u8_url]
                 s["cmd"] = cmd
@@ -348,6 +360,9 @@ class DownloadManager:
                     # UI: limitiamo le notifiche a ~10/s per non intasare il
                     # loop di Tkinter (i valori restano comunque aggiornati,
                     # solo la notifica e' limitata).
+                    if muxed:
+                        # Un solo stream che contiene anche l'audio
+                        item["audio_progress"] = item.get("video_progress", 0)
                     now = time.monotonic()
                     if updated and now - last_callback >= 0.1:
                         last_callback = now
@@ -392,7 +407,7 @@ class DownloadManager:
 
             cmds = {key: s["cmd"] for key, s in streams.items()}
             last_video_rc = streams["video"]["process"].returncode
-            last_audio_rc = streams["audio"]["process"].returncode
+            last_audio_rc = streams["audio"]["process"].returncode if "audio" in streams else 0
             if last_video_rc == 0 and last_audio_rc == 0:
                 break
             last_outputs = {key: "".join(s["output"]) for key, s in streams.items()}
@@ -416,16 +431,18 @@ class DownloadManager:
 
         video_files = glob.glob(os.path.join(dest_dir, f"{filename}.video.*"))
         audio_files = glob.glob(os.path.join(dest_dir, f"{filename}.audio.*"))
-        if not video_files or not audio_files:
+        if not video_files or (not muxed and not audio_files):
             outputs = {key: "".join(s["output"]) for key, s in streams.items()}
             self._log_failure(item, cmds, outputs, extra="File video o audio mancante dopo il download")
             raise Exception(f"File video o audio mancante dopo il download - dettagli in {DEBUG_LOG_FILE}")
-        video_file = pick_media_file(video_files)
-        audio_file = pick_media_file(audio_files)
+        inputs = ["-i", pick_media_file(video_files)]
+        if not muxed:
+            inputs += ["-i", pick_media_file(audio_files)]
 
+        # Con stream muxato e' un semplice remux in .mp4 del file unico
         final_path = os.path.join(dest_dir, f"{filename}.mp4")
         merge_cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-                     "-i", video_file, "-i", audio_file, "-c", "copy", final_path]
+                     *inputs, "-c", "copy", final_path]
         merge = subprocess.run(merge_cmd, capture_output=True, text=True)
         if merge.returncode != 0:
             self._log_failure(

@@ -63,6 +63,13 @@ therefore launches **two parallel `yt-dlp` subprocesses** per episode (`-f bestv
 once both exit 0, muxes them itself with a plain `ffmpeg -c copy`. Requires `--impersonate chrome`
 (curl_cffi/yt-dlp TLS impersonation) to get past vixcloud's fingerprinting.
 
+**Exception: some titles are served already muxed** (no `EXT-X-MEDIA:TYPE=AUDIO` in the master playlist; seen
+on titles whose vixcloud playlist URL carries `?b=1`). There `-f bestvideo`/`-f bestaudio` match nothing, so
+`_download_one` first calls `ScrapeEngine.has_separate_audio()` and, when false, runs a single `-f best`
+subprocess and just remuxes it to `.mp4` (`audio_progress` mirrors `video_progress`). Related trap in
+`build_m3u8`: the playlist URL may already have a query string, and the rebuilt params must always follow
+`?` — joining with `&` yields `playlist/ID&b=1&token=...`, which vixcloud answers with 403.
+
 **Multiple episodes can also download in parallel** (`DownloadManager.max_parallel_episodes`, default 1, user
 configurable via the Settings dialog): `_download_loop` runs pending queue items through a
 `ThreadPoolExecutor(max_workers=max_parallel_episodes)` instead of a sequential loop. Because of this,

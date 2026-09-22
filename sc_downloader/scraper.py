@@ -59,8 +59,24 @@ class ScrapeEngine:
         params["expires"] = [expires]
         if can_fhd:
             params["h"] = ["1"]
+        # params contiene già anche la query originale (es. "b=1"): il separatore dopo il path è sempre "?"
         flat_params = "&".join(f"{k}={v[0]}" for k, v in params.items())
-        sep = "&" if parsed.query else "?"
-        m3u8_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}{sep}{flat_params}"
+        m3u8_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}?{flat_params}"
 
         return m3u8_url
+
+    def has_separate_audio(self, m3u8_url):
+        """True se la master playlist ha tracce audio separate (EXT-X-MEDIA
+        TYPE=AUDIO), il caso tipico; False se gli stream sono gia' muxati
+        video+audio (succede per alcuni titoli, es. quelli con "b=1" nell'URL).
+        In caso di errore assume il caso tipico."""
+        try:
+            resp = self.session.get(
+                m3u8_url,
+                headers={"User-Agent": USER_AGENT, "Referer": "https://vixcloud.co/", "Origin": "https://vixcloud.co"},
+            )
+        except Exception:
+            return True
+        if resp.status_code != 200 or "#EXTM3U" not in resp.text:
+            return True
+        return "TYPE=AUDIO" in resp.text
