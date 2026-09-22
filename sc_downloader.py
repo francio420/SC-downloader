@@ -4,6 +4,7 @@ SC Downloader - StreamingCommunity Downloader con Ricerca Integrata
 Scarica video da StreamingCommunity con interfaccia grafica tkinter.
 """
 
+import glob
 import json
 import os
 import re
@@ -183,26 +184,30 @@ class DownloadManager:
         self.current_index = -1
         self.is_downloading = False
         self._stop_flag = False
-        self._current_process = None
+        self._current_processes = []
         self.api = StreamingCommunityAPI()
         self.scrape = ScrapeEngine(session=self.api.session)
         self.history = HistoryManager()
 
     def kill_current(self):
-        """Termina immediatamente il download in corso (yt-dlp e i suoi processi
-        figli, es. ffmpeg), evitando che restino orfani in background."""
+        """Termina immediatamente il download in corso (video e audio scaricati
+        in parallelo, e i loro eventuali processi figli come ffmpeg), evitando
+        che restino orfani in background."""
         self._stop_flag = True
-        process = self._current_process
-        if process and process.poll() is None:
-            try:
-                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-            except (ProcessLookupError, PermissionError, OSError):
-                process.kill()
+        for process in list(self._current_processes):
+            if process and process.poll() is None:
+                try:
+                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                except (ProcessLookupError, PermissionError, OSError):
+                    process.kill()
 
     def add(self, item):
         """Aggiunge un episodio alla coda. item = {title_name, season, episode, episode_name, scws_id, duration}"""
         item["status"] = "in_coda"
         item["progress"] = 0
+        item["video_progress"] = 0
+        item["audio_progress"] = 0
+        item["audio_started"] = False
         self.queue.append(item)
 
     def remove(self, index):
@@ -241,17 +246,25 @@ class DownloadManager:
             self.progress_callback(self._overall_progress())
             try:
                 self._download_one(item)
-                item["status"] = "completato"
-                item["progress"] = 100
-                self.history.add({
-                    "title": item["title_name"],
-                    "season": item["season"],
-                    "episode": item["episode"],
-                    "episode_name": item.get("episode_name", ""),
-                    "filename": item.get("filename", ""),
-                    "size_mb": item.get("size_mb", 0),
-                    "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                })
+                if self._stop_flag:
+                    # Interrotto dall'utente: non e' completato, va ripreso
+                    # in un successivo avvio invece di essere segnato come
+                    # scaricato con successo.
+                    item["status"] = "in_coda"
+                    item["progress"] = 0
+                    item["size_mb"] = 0
+                else:
+                    item["status"] = "completato"
+                    item["progress"] = 100
+                    self.history.add({
+                        "title": item["title_name"],
+                        "season": item["season"],
+                        "episode": item["episode"],
+                        "episode_name": item.get("episode_name", ""),
+                        "filename": item.get("filename", ""),
+                        "size_mb": item.get("size_mb", 0),
+                        "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    })
             except Exception as e:
                 item["status"] = "errore"
                 item["error"] = str(e)
@@ -288,85 +301,157 @@ class DownloadManager:
         filename = f"{safe_name}_S{item['season']:02d}E{item['episode']:02d}"
         item["filename"] = filename
 
-        # Cartella <output>/<Serie>/, con sottocartella <Stagione NN> se in coda
-        # ci sono episodi di piu' stagioni per lo stesso titolo. Riusa cartelle
-        # gia' esistenti (anche con maiuscole/minuscole diverse) invece di
-        # duplicarle.
+        # Cartella <output>/<Serie>/<Stagione NN>/, sempre, cosi' la struttura
+        # resta coerente anche scaricando le stagioni in sessioni separate
+        # (altrimenti scaricare una stagione alla volta non creerebbe mai la
+        # sottocartella, mescolando le stagioni nella cartella della serie).
+        # Riusa cartelle gia' esistenti (case-insensitive) invece di duplicarle.
         dest_dir = self._resolve_dir(self.output_folder, safe_name)
-        seasons_for_title = {i["season"] for i in self.queue if i.get("title_id") == item.get("title_id")}
-        if len(seasons_for_title) > 1:
-            dest_dir = self._resolve_dir(dest_dir, f"Stagione {item['season']:02d}")
+        dest_dir = self._resolve_dir(dest_dir, f"Stagione {item['season']:02d}")
 
-        output_template = os.path.join(dest_dir, f"{filename}.%(ext)s")
+        def disk_size_mb():
+            """Somma la dimensione reale su disco dei file di questo episodio
+            (i .part di video e audio in scaricamento, o il file finale dopo
+            il merge). E' l'unica fonte di verita' per il peso: niente stime
+            "~" che possono sovra/sottostimare il totale."""
+            total = 0
+            for path in glob.glob(os.path.join(dest_dir, filename + "*")):
+                try:
+                    total += os.path.getsize(path)
+                except OSError:
+                    pass
+            return total / (1024 * 1024)
 
-        cmd = [
+        base_args = [
             sys.executable, "-u", "-m", "yt_dlp",
             "--newline",
             "--referer", "https://vixcloud.co/",
             "--add-header", "Origin:https://vixcloud.co",
             "--impersonate", "chrome",
-            "-o", output_template,
-            m3u8_url,
+            "--hls-prefer-native",
+            "--concurrent-fragments", "8",
         ]
+        streams = {
+            "video": {
+                "template": os.path.join(dest_dir, f"{filename}.video.%(ext)s"),
+                "format": "bestvideo",
+            },
+            "audio": {
+                "template": os.path.join(dest_dir, f"{filename}.audio.%(ext)s"),
+                "format": "bestaudio",
+            },
+        }
 
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
+        popen_kwargs = dict(
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            encoding="utf-8", errors="replace", bufsize=1,
             start_new_session=True,  # permette di terminare anche i figli (es. ffmpeg) come gruppo
         )
-        self._current_process = process
+        for key, s in streams.items():
+            cmd = base_args + ["-f", s["format"], "-o", s["template"], m3u8_url]
+            s["process"] = subprocess.Popen(cmd, **popen_kwargs)
 
-        try:
+        self._current_processes = [s["process"] for s in streams.values()]
+        item["audio_started"] = True  # video e audio partono insieme
+
+        def reader(key, process):
+            """Legge l'output di un singolo stream (video o audio) e ne
+            aggiorna la percentuale/velocita' in modo indipendente
+            dall'altro, dato che ora scaricano in parallelo."""
             for line in process.stdout:
                 if self._stop_flag:
-                    self.kill_current()
                     break
 
-                updated = False
+                pkey = f"{key}_progress"
+                frag_match = re.search(r"\(frag\s+(\d+)/(\d+)\)", line)
+                if frag_match:
+                    n, m = int(frag_match.group(1)), int(frag_match.group(2))
+                    if m > 0:
+                        item[pkey] = max(item.get(pkey, 0), min(100.0, n / m * 100))
+                else:
+                    pct_match = re.search(r"\[download\]\s+([\d.]+)%", line)
+                    if pct_match:
+                        item[pkey] = max(item.get(pkey, 0), min(100.0, float(pct_match.group(1))))
 
-                # Parsing progresso/peso da yt-dlp (downloader nativo)
-                pct_match = re.search(r"\[download\]\s+([\d.]+)%", line)
-                if pct_match:
-                    item["progress"] = float(pct_match.group(1))
-                    updated = True
+                speed_match = re.search(r"at\s+([\d.]+)\s*([KMG])i?B/s", line)
+                if speed_match:
+                    value, unit = float(speed_match.group(1)), speed_match.group(2)
+                    scale = {"K": 1 / 1024, "M": 1, "G": 1024}[unit]
+                    item[f"{key}_speed_mb_s"] = value * scale
 
-                size_match = re.search(r"\[download\]\s+([\d.]+)MiB", line)
-                if size_match:
-                    item["size_mb"] = float(size_match.group(1))
-                    updated = True
-
-                # Per gli stream HLS di vixcloud.co yt-dlp delega il download a
-                # ffmpeg come downloader esterno: niente righe "[download] X%",
-                # solo lo stato di ffmpeg ("time=..." e "size=..."). Calcoliamo
-                # la percentuale rispetto alla durata nota dell'episodio.
-                # ffmpeg >= 4.x usa "KiB", le versioni precedenti "kB": accetta entrambe.
-                ff_size_match = re.search(r"size=\s*(\d+)\s*ki?b", line, re.IGNORECASE)
-                if ff_size_match:
-                    item["size_mb"] = int(ff_size_match.group(1)) / 1024
-                    updated = True
-
+                # Fallback per il raro caso in cui yt-dlp deleghi questo
+                # stream a ffmpeg (es. crypto non disponibile): usa il tempo
+                # processato rispetto alla durata nota dell'episodio.
                 time_match = re.search(r"time=(\d+):(\d{2}):(\d{2})\.\d+", line)
                 if time_match and item.get("duration"):
-                    h, m, s = (int(g) for g in time_match.groups())
+                    h, m2, s2 = (int(g) for g in time_match.groups())
                     total_seconds = item["duration"] * 60
                     if total_seconds > 0:
-                        item["progress"] = min(99.0, (h * 3600 + m * 60 + s) / total_seconds * 100)
-                        updated = True
+                        candidate = min(99.0, (h * 3600 + m2 * 60 + s2) / total_seconds * 100)
+                        item[pkey] = max(item.get(pkey, 0), candidate)
 
-                if updated:
-                    self.progress_callback(self._overall_progress())
+                item["progress"] = (item.get("video_progress", 0) + item.get("audio_progress", 0)) / 2
+                item["speed_mb_s"] = item.get("video_speed_mb_s", 0) + item.get("audio_speed_mb_s", 0)
+                self.progress_callback(self._overall_progress())
 
             process.wait()
-        finally:
-            self._current_process = None
 
-        if process.returncode != 0 and not self._stop_flag:
-            raise Exception(f"yt-dlp exit code {process.returncode}")
+        threads = [
+            threading.Thread(target=reader, args=(key, s["process"]), daemon=True)
+            for key, s in streams.items()
+        ]
+        for t in threads:
+            t.start()
+
+        last_disk_check = 0.0
+        while any(t.is_alive() for t in threads):
+            if self._stop_flag:
+                self.kill_current()
+                break
+            now = time.monotonic()
+            if now - last_disk_check >= 1.0:
+                last_disk_check = now
+                size_mb = disk_size_mb()
+                if size_mb:
+                    item["size_mb"] = size_mb
+                    self.progress_callback(self._overall_progress())
+            time.sleep(0.2)
+
+        for t in threads:
+            t.join(timeout=5)
+
+        item["speed_mb_s"] = 0
+        self._current_processes = []
+
+        if self._stop_flag:
+            return
+
+        video_rc = streams["video"]["process"].returncode
+        audio_rc = streams["audio"]["process"].returncode
+        if video_rc != 0 or audio_rc != 0:
+            raise Exception(f"yt-dlp fallito (video={video_rc}, audio={audio_rc})")
+
+        video_files = glob.glob(os.path.join(dest_dir, f"{filename}.video.*"))
+        audio_files = glob.glob(os.path.join(dest_dir, f"{filename}.audio.*"))
+        if not video_files or not audio_files:
+            raise Exception("File video o audio mancante dopo il download")
+        video_file, audio_file = video_files[0], audio_files[0]
+
+        final_path = os.path.join(dest_dir, f"{filename}.mp4")
+        merge = subprocess.run(
+            ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+             "-i", video_file, "-i", audio_file, "-c", "copy", final_path],
+            capture_output=True, text=True,
+        )
+        if merge.returncode != 0:
+            raise Exception(f"ffmpeg merge fallito: {merge.stderr[-300:]}")
+
+        os.remove(video_file)
+        os.remove(audio_file)
+
+        size_mb = disk_size_mb()  # ora resta solo il file finale unito
+        if size_mb:
+            item["size_mb"] = size_mb
 
 
 # ─── HistoryManager ──────────────────────────────────────────────────────────
@@ -524,7 +609,6 @@ class ScDownloaderApp(tk.Tk):
 
         self._setup_styles()
         self._build_ui()
-        self._update_history()
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -704,7 +788,7 @@ class ScDownloaderApp(tk.Tk):
         self.queue_tree.heading("progresso", text="Progresso")
         self.queue_tree.column("titolo", width=280)
         self.queue_tree.column("stato", width=100)
-        self.queue_tree.column("progresso", width=190, anchor="center")
+        self.queue_tree.column("progresso", width=290, anchor="center")
         self.queue_tree.pack(side="left", fill="both", expand=True)
 
         q_scroll = ttk.Scrollbar(queue_frame, orient="vertical", command=self.queue_tree.yview)
@@ -748,29 +832,6 @@ class ScDownloaderApp(tk.Tk):
 
         self.status_label = ttk.Label(progress_frame, text="Pronto", foreground="#a6adc8")
         self.status_label.pack(anchor="w", pady=(2, 0))
-
-        # ── Storia ──
-        history_label = ttk.Label(container, text="Storia Download", font=("Segoe UI", 10, "bold"))
-        history_label.pack(anchor="w", padx=10, pady=(5, 2))
-
-        history_frame = ttk.Frame(container)
-        history_frame.pack(fill="x", padx=10, pady=(0, 10))
-
-        h_cols = ("data", "titolo", "episodio", "dimensione")
-        self.history_tree = ttk.Treeview(history_frame, columns=h_cols, show="headings", height=4)
-        self.history_tree.heading("data", text="Data")
-        self.history_tree.heading("titolo", text="Titolo")
-        self.history_tree.heading("episodio", text="Episodio")
-        self.history_tree.heading("dimensione", text="MB")
-        self.history_tree.column("data", width=120)
-        self.history_tree.column("titolo", width=250)
-        self.history_tree.column("episodio", width=100)
-        self.history_tree.column("dimensione", width=60, anchor="center")
-        self.history_tree.pack(side="left", fill="both", expand=True)
-
-        h_scroll = ttk.Scrollbar(history_frame, orient="vertical", command=self.history_tree.yview)
-        h_scroll.pack(side="right", fill="y")
-        self.history_tree.configure(yscrollcommand=h_scroll.set)
 
     # ── Ricerca ──────────────────────────────────────────────────────────────
 
@@ -954,9 +1015,24 @@ class ScDownloaderApp(tk.Tk):
             return ""
         filled = int(round(pct / 100 * width))
         bar = "█" * filled + "░" * (width - filled)
-        text = f"{bar} {pct:.0f}%"
+
+        # Video e audio sono stream separati scaricati in sequenza: mostrarli
+        # distintamente evita che la percentuale sembri "bloccata" mentre il
+        # video e' gia' finito e l'audio sta ancora scaricando.
+        if status == "in_corso":
+            video_pct = item.get("video_progress", 0)
+            if item.get("audio_started"):
+                text = f"{bar} V:{video_pct:.0f}% A:{item.get('audio_progress', 0):.0f}%"
+            else:
+                text = f"{bar} V:{video_pct:.0f}%"
+        else:
+            text = f"{bar} {pct:.0f}%"
+
         size_mb = item.get("size_mb", 0)
-        if size_mb:
+        speed = item.get("speed_mb_s", 0)
+        if size_mb and status == "in_corso" and speed:
+            text += f" ({size_mb:.1f} MB, {speed:.1f} MB/s)"
+        elif size_mb:
             text += f" ({size_mb:.1f} MB)"
         return text
 
@@ -1005,7 +1081,6 @@ class ScDownloaderApp(tk.Tk):
     def _on_download_finished(self):
         self.after(0, lambda: self.btn_download.config(state="normal"))
         self.after(0, lambda: self.btn_stop.config(state="disabled"))
-        self.after(0, self._update_history)
 
     # ── Cartella ─────────────────────────────────────────────────────────────
 
@@ -1016,20 +1091,6 @@ class ScDownloaderApp(tk.Tk):
             self.output_folder = folder
             self.folder_var.set(folder)
             self._save_output_folder()
-
-    # ── Storia ───────────────────────────────────────────────────────────────
-
-    def _update_history(self):
-        self.history_tree.delete(*self.history_tree.get_children())
-        if not self.download_manager:
-            return
-        for entry in self.download_manager.history.get_all():
-            self.history_tree.insert("", "end", values=(
-                entry.get("date", ""),
-                entry.get("title", ""),
-                f"S{entry.get('season', 0):02d}E{entry.get('episode', 0):02d} - {entry.get('episode_name', '')}",
-                f"{entry.get('size_mb', 0):.0f}",
-            ))
 
     # ── Callbacks ────────────────────────────────────────────────────────────
 
