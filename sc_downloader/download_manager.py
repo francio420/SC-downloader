@@ -320,13 +320,21 @@ class DownloadManager:
                 f"yt-dlp fallito (video={video_rc}, audio={audio_rc}) - dettagli in {DEBUG_LOG_FILE}"
             )
 
+        def pick_media_file(paths):
+            """Sceglie il file multimediale vero scartando eventuali metadati
+            temporanei di yt-dlp (es. .ytdl) che possono comparire nello
+            stesso elenco insieme al file effettivo."""
+            media = [p for p in paths if not p.endswith(".ytdl")]
+            return media[0] if media else paths[0]
+
         video_files = glob.glob(os.path.join(dest_dir, f"{filename}.video.*"))
         audio_files = glob.glob(os.path.join(dest_dir, f"{filename}.audio.*"))
         if not video_files or not audio_files:
             outputs = {key: "".join(s["output"]) for key, s in streams.items()}
             self._log_failure(item, cmds, outputs, extra="File video o audio mancante dopo il download")
             raise Exception(f"File video o audio mancante dopo il download - dettagli in {DEBUG_LOG_FILE}")
-        video_file, audio_file = video_files[0], audio_files[0]
+        video_file = pick_media_file(video_files)
+        audio_file = pick_media_file(audio_files)
 
         final_path = os.path.join(dest_dir, f"{filename}.mp4")
         merge_cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
@@ -339,8 +347,14 @@ class DownloadManager:
             )
             raise Exception(f"ffmpeg merge fallito - dettagli in {DEBUG_LOG_FILE}")
 
-        os.remove(video_file)
-        os.remove(audio_file)
+        # Rimuove tutti i file intermedi trovati (non solo quelli usati per il
+        # merge), cosi' eventuali residui di tentativi precedenti per lo
+        # stesso episodio non restano nella cartella insieme al file finale.
+        for path in set(video_files + audio_files):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
         size_mb = disk_size_mb()  # ora resta solo il file finale unito
         if size_mb:
