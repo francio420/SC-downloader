@@ -80,7 +80,10 @@ class ScDownloaderApp(tk.Tk):
         self.config(menu=menubar)
 
     def _open_settings(self):
-        result = SettingsDialog(self, self.max_parallel_episodes, self.concurrent_fragments).show()
+        download_active = bool(self.download_manager and self.download_manager.is_downloading)
+        result = SettingsDialog(
+            self, self.max_parallel_episodes, self.concurrent_fragments, download_active=download_active
+        ).show()
         if result:
             self.max_parallel_episodes = result["max_parallel_episodes"]
             self.concurrent_fragments = result["concurrent_fragments"]

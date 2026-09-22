@@ -85,6 +85,12 @@ class DownloadManager:
         thread.start()
 
     def _download_loop(self):
+        # Congelati per l'intera durata di questo batch: cambiarli dal menu
+        # Impostazioni mentre e' in corso un download si applica solo al
+        # prossimo avvio, non a meta' di uno gia' partito.
+        parallel_episodes = max(1, self.max_parallel_episodes)
+        concurrent_fragments = self.concurrent_fragments
+
         pending = [item for item in self.queue if item["status"] != "completato"]
 
         def worker(item):
@@ -94,7 +100,7 @@ class DownloadManager:
             self.status_callback(self._status_message())
             self.progress_callback(self._overall_progress())
             try:
-                self._download_one(item)
+                self._download_one(item, concurrent_fragments)
                 if self._stop_flag:
                     # Interrotto dall'utente: non e' completato, va ripreso
                     # in un successivo avvio invece di essere segnato come
@@ -112,9 +118,9 @@ class DownloadManager:
             self.status_callback(self._status_message())
             self.progress_callback(self._overall_progress())
 
-        # Fino a max_parallel_episodes episodi scaricati contemporaneamente;
+        # Fino a parallel_episodes episodi scaricati contemporaneamente;
         # ognuno a sua volta scarica video e audio in parallelo tra loro.
-        with ThreadPoolExecutor(max_workers=max(1, self.max_parallel_episodes)) as pool:
+        with ThreadPoolExecutor(max_workers=parallel_episodes) as pool:
             list(pool.map(worker, pending))
 
         self.is_downloading = False
@@ -169,7 +175,7 @@ class DownloadManager:
         except OSError:
             pass
 
-    def _download_one(self, item):
+    def _download_one(self, item, concurrent_fragments):
         m3u8_url = self.scrape.build_m3u8(item["title_id"], item["episode_id"])
 
         safe_name = re.sub(r'[<>:"/\\|?*]', '_', item["title_name"])
@@ -204,7 +210,7 @@ class DownloadManager:
             "--add-header", "Origin:https://vixcloud.co",
             "--impersonate", "chrome",
             "--hls-prefer-native",
-            "--concurrent-fragments", str(self.concurrent_fragments),
+            "--concurrent-fragments", str(concurrent_fragments),
         ]
         streams = {
             "video": {
