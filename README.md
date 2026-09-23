@@ -53,3 +53,18 @@ parallelo e quanti frammenti concorrenti usare per ogni stream video/audio.
 - I download vengono eseguiti tramite `yt-dlp` con `ffmpeg`; `pycryptodomex` e' necessaria per gli stream HLS criptati
 - L'ultima cartella di destinazione usata e le impostazioni di download sono salvate in `.sc_settings.json`
 - In caso di download fallito, i dettagli (comandi eseguiti e output completo) sono salvati in `.sc_debug.log`
+
+## Disclaimer
+
+Questo progetto è realizzato esclusivamente a scopo educativo e di studio
+(scraping HTML, gestione di stream HLS, GUI Tkinter). Non è affiliato in alcun
+modo con StreamingCommunity, vixcloud.co o i titolari dei contenuti, e non
+ospita né distribuisce alcun contenuto.
+
+L'utente è l'unico responsabile dell'uso che fa del software e del rispetto
+delle leggi sul diritto d'autore vigenti nel proprio paese. L'autore non si
+assume alcuna responsabilità per eventuali usi illeciti.
+
+## Licenza
+
+Distribuito con licenza MIT, vedi [LICENSE](LICENSE).
