@@ -37,22 +37,39 @@ def font(size=10, weight="normal"):
     return (family(), size, weight)
 
 
-_measure_cache = {}
+_fonts = {}
+_char_widths = {}
 
 
 def measure(text, fnt):
-    f = _measure_cache.get(fnt)
-    if f is None:
-        f = _measure_cache[fnt] = tkfont.Font(family=fnt[0], size=fnt[1], weight=fnt[2])
-    return f.measure(text)
+    """Larghezza in pixel del testo. Ogni `font measure` di Tk costa ~1 ms e
+    troncare/andare a capo ne richiede centinaia per ridisegno, quindi si
+    misura ogni carattere una volta sola e si somma: Tk non applica kerning,
+    per cui il risultato coincide al pixel con la misura dell'intera stringa."""
+    widths = _char_widths.get(fnt)
+    if widths is None:
+        widths = _char_widths[fnt] = {}
+        _fonts[fnt] = tkfont.Font(family=fnt[0], size=fnt[1], weight=fnt[2])
+    total = 0
+    for ch in text:
+        w = widths.get(ch)
+        if w is None:
+            w = widths[ch] = _fonts[fnt].measure(ch)
+        total += w
+    return total
 
 
 def ellipsize(text, fnt, max_width):
     if measure(text, fnt) <= max_width:
         return text
-    while text and measure(text + "…", fnt) > max_width:
-        text = text[:-1]
-    return text.rstrip() + "…"
+    lo, hi = 0, len(text)  # ricerca binaria del prefisso piu' lungo che ci sta
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if measure(text[:mid] + "…", fnt) <= max_width:
+            lo = mid
+        else:
+            hi = mid - 1
+    return text[:lo].rstrip() + "…"
 
 
 def wrap_lines(text, fnt, max_width, max_lines):

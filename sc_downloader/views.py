@@ -581,23 +581,30 @@ class DetailView(tk.Frame):
         return {"in_coda": "IN CODA", "in_corso": "IN CORSO", "completato": "SCARICATO"}.get(status)
 
     def toggle(self, index, shift=False):
+        new = set(self.selected)
         if shift and self._anchor is not None:
             lo, hi = sorted((self._anchor, index))
             target = self._anchor in self.selected
             for i in range(lo, hi + 1):
-                (self.selected.add if target else self.selected.discard)(i)
+                (new.add if target else new.discard)(i)
         else:
-            self.selected ^= {index}
+            new ^= {index}
             self._anchor = index
-        self._redraw_rows()
+        self._set_selection(new)
 
     def select_all(self):
-        self.selected = set(range(len(self.episodes)))
-        self._redraw_rows()
+        self._set_selection(set(range(len(self.episodes))))
 
     def select_none(self):
-        self.selected.clear()
-        self._redraw_rows()
+        self._set_selection(set())
+
+    def _set_selection(self, new):
+        # Ridisegna solo le righe il cui stato di selezione e' cambiato
+        changed = self.selected ^ new
+        self.selected = new
+        for i in changed:
+            self.rows[i].draw()
+        self._update_action_bar()
 
     def _redraw_rows(self):
         for row in self.rows:
