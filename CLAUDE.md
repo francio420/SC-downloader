@@ -110,7 +110,11 @@ progress/speed are tracked as separate fields (`video_progress`/`audio_progress`
 `DownloadManager.kill_current()` can `os.killpg(...)` the whole process group (including any `ffmpeg` child)
 instead of leaving orphaned downloads running after Stop/window-close. `kill_current()` is the single choke
 point for stopping — both the Stop button and the window-close handler (with a confirmation dialog if a
-download is active) route through it.
+download is active) route through it. After a user stop, each interrupted `_download_one` deletes its partial
+`<filename>.video.*`/`.audio.*` files (`.part`, `.part-FragN`, `.ytdl`) and removes the destination folders
+left empty (`_remove_empty_dirs`, never above `output_folder`), then returns `False` so the worker resets the
+item to `in_coda`. `_download_one` returns `True` on success — a stop arriving during the final ffmpeg merge
+still yields a complete file, so that item is marked `completato`, not reset.
 
 **Threading model**: Tk main thread (plus `ScDownloaderApp.run_async` threads for search/title/season requests
 and `ImageLoader`'s pool for images — both hand results back via `after(0, ...)`); one `_download_loop` background thread owning a `ThreadPoolExecutor`

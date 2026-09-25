@@ -49,7 +49,9 @@ python -m sc_downloader
 
 Nella sezione **Opzioni** puoi configurare la cartella, quanti episodi scaricare
 in parallelo e quanti frammenti concorrenti usare per ogni stream video/audio.
-Scorciatoie: Ctrl+F cerca, Ctrl+1/2/3 cambia sezione, Esc torna ai risultati.
+Scorciatoie: Ctrl+F cerca, Ctrl+1/2/3 cambia sezione, Esc torna ai risultati, Ctrl+O apre la cartella dei
+download (apribile anche dal percorso in **Download**, da **Opzioni** o dall'icona cartella di ogni episodio
+completato).
 
 ## Note
 

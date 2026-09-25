@@ -675,17 +675,25 @@ class QueueCard(tk.Canvas):
     def __init__(self, parent, view, item):
         super().__init__(parent, height=self.H, bg=T.BG, highlightthickness=0, bd=0)
         self.view, self.item = view, item
-        self.close_hover = False
+        self.hover_tag = None
         self._sig = None
         self.bind("<Configure>", lambda e: self.refresh(force=True))
-        self.tag_bind("close", "<Enter>", lambda e: self._set_close_hover(True))
-        self.tag_bind("close", "<Leave>", lambda e: self._set_close_hover(False))
-        self.tag_bind("close", "<Button-1>", lambda e: view.remove(item))
+        for tag, action in (("close", lambda: view.remove(item)),
+                            ("open", lambda: view.app.open_folder(item.get("dest_dir")))):
+            self.tag_bind(tag, "<Enter>", lambda e, t=tag: self._set_hover_tag(t))
+            self.tag_bind(tag, "<Leave>", lambda e: self._set_hover_tag(None))
+            self.tag_bind(tag, "<Button-1>", lambda e, a=action: a())
 
-    def _set_close_hover(self, value):
-        self.close_hover = value
-        self.configure(cursor="hand2" if value else "")
+    def _set_hover_tag(self, tag):
+        self.hover_tag = tag
+        self.configure(cursor="hand2" if tag else "")
         self.refresh(force=True)
+
+    def _icon_button(self, tag, icon, cx, cy):
+        hover = self.hover_tag == tag
+        self.create_oval(cx - 13, cy - 13, cx + 13, cy + 13, fill=T.SURFACE_3 if hover else T.SURFACE, outline="",
+                         tags=tag)
+        draw_icon(self, icon, cx, cy, 16, T.TEXT if hover else T.SUBTLE, tags=tag)
 
     def refresh(self, force=False):
         i = self.item
@@ -727,14 +735,12 @@ class QueueCard(tk.Canvas):
         pf = T.font(8, "bold")
         pw = T.measure(status, pf) + 20
         rx = w - 52
+        if i["status"] == "completato" and i.get("dest_dir"):
+            self._icon_button("open", "folder", w - 60, 26)
+            rx -= 32
         rounded_rect(self, rx - pw, 16, rx, 36, 10, fill=T.blend(color, T.SURFACE, 0.82), outline="")
         self.create_text(rx - pw / 2, 26, text=status, fill=color, font=pf)
-        cx = w - 28
-        if self.close_hover:
-            self.create_oval(cx - 13, 13, cx + 13, 39, fill=T.SURFACE_3, outline="", tags="close")
-        else:
-            self.create_oval(cx - 13, 13, cx + 13, 39, fill=T.SURFACE, outline="", tags="close")
-        draw_icon(self, "close", cx, 26, 16, T.TEXT if self.close_hover else T.SUBTLE, tags="close")
+        self._icon_button("close", "close", w - 28, 26)
         # Metadati a destra, seconda riga
         size = i.get("size_mb") or 0
         speed = i.get("speed_mb_s") or 0
@@ -814,8 +820,9 @@ class DownloadsView(tk.Frame):
                height=40).pack(side="left", padx=(10, 0))
         Button(tools, "Svuota coda", icon="trash", command=self.clear_all, variant="flat", height=40) \
             .pack(side="left")
-        self.folder_btn = Button(tools, "", icon="folder", command=app.choose_folder, variant="ghost", height=40)
+        self.folder_btn = Button(tools, "", icon="folder", command=app.open_folder, variant="ghost", height=40)
         self.folder_btn.pack(side="right")
+        Button(tools, "Cambia", command=app.choose_folder, variant="flat", height=40).pack(side="right", padx=(0, 4))
         self.status = tk.Label(top, text="Pronto", bg=T.BG, fg=T.MUTED, font=T.font(9), anchor="w")
         self.status.pack(fill="x")
 
@@ -948,7 +955,8 @@ class SettingsView(tk.Frame):
         self.folder_label = tk.Label(row, text="", bg=T.SURFACE_2, fg=T.TEXT, font=T.font(10), anchor="w",
                                      padx=12, pady=8)
         self.folder_label.pack(side="left", fill="x", expand=True)
-        Button(row, "Cambia", icon="folder", command=app.choose_folder, height=38).pack(side="left", padx=(10, 0))
+        Button(row, "Apri", icon="folder", command=app.open_folder, height=38).pack(side="left", padx=(10, 0))
+        Button(row, "Cambia", command=app.choose_folder, height=38).pack(side="left", padx=(8, 0))
 
         # Parallelismo
         card = self._card(body, "Episodi in parallelo",
@@ -967,7 +975,8 @@ class SettingsView(tk.Frame):
         # Scorciatoie e info
         card = self._card(body, "Scorciatoie da tastiera", "")
         for keys, desc in (("Ctrl+F  /  /", "Vai alla ricerca"), ("Ctrl+1 · 2 · 3", "Cambia sezione"),
-                           ("Esc", "Torna ai risultati"), ("Ctrl+A", "Seleziona tutti gli episodi"),
+                           ("Esc", "Torna ai risultati"),
+                           ("Ctrl+O", "Apri la cartella dei download"), ("Ctrl+A", "Seleziona tutti gli episodi"),
                            ("Invio", "Aggiungi gli episodi selezionati alla coda")):
             r = tk.Frame(card, bg=T.SURFACE)
             r.pack(fill="x", pady=2)

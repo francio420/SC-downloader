@@ -112,13 +112,17 @@ class DownloadManager:
             self.status_callback(self._status_message())
             self.progress_callback(self._overall_progress())
             try:
-                self._download_one(item, concurrent_fragments)
-                if self._stop_flag:
-                    # Interrotto dall'utente: non e' completato, va ripreso
-                    # in un successivo avvio invece di essere segnato come
-                    # scaricato con successo.
+                completed = self._download_one(item, concurrent_fragments)
+                if not completed:
+                    # Interrotto dall'utente (i file parziali sono gia' stati
+                    # eliminati da _download_one): va ripreso da zero in un
+                    # successivo avvio invece di essere segnato come scaricato.
+                    # Se invece lo stop arriva durante il merge finale, il file
+                    # e' completo e resta "completato".
                     item["status"] = "in_coda"
                     item["progress"] = 0
+                    item["video_progress"] = 0
+                    item["audio_progress"] = 0
                     item["size_mb"] = 0
                 else:
                     item["status"] = "completato"
@@ -175,6 +179,19 @@ class DownloadManager:
         return path
 
     @staticmethod
+    def _remove_empty_dirs(path, stop_at):
+        """Rimuove path e i suoi genitori finche' sono vuoti, senza mai
+        risalire oltre stop_at (la cartella di destinazione scelta)."""
+        stop_at = os.path.abspath(stop_at)
+        path = os.path.abspath(path)
+        while path != stop_at and path.startswith(stop_at + os.sep):
+            try:
+                os.rmdir(path)  # fallisce (senza toccare nulla) se non e' vuota
+            except OSError:
+                return
+            path = os.path.dirname(path)
+
+    @staticmethod
     def _log_failure(item, cmds, outputs, extra=""):
         """Scrive un log dettagliato di un download fallito (comandi eseguiti,
         codici di uscita, output completo di yt-dlp/ffmpeg) in DEBUG_LOG_FILE,
@@ -195,6 +212,8 @@ class DownloadManager:
             pass
 
     def _download_one(self, item, concurrent_fragments):
+        """Scarica un elemento. True se completato, False se interrotto
+        dall'utente (in quel caso i file parziali vengono eliminati)."""
         m3u8_url = self.scrape.build_m3u8(item["title_id"], item["episode_id"])
         # Di solito video e audio sono rendition HLS separate, ma per alcuni
         # titoli il CDN offre solo stream gia' muxati: li' "bestvideo"/
@@ -218,6 +237,7 @@ class DownloadManager:
             dest_dir = self._resolve_dir(dest_dir, safe_name)
             dest_dir = self._resolve_dir(dest_dir, f"Stagione {item['season']:02d}")
         item["filename"] = filename
+        item["dest_dir"] = dest_dir
 
         def disk_size_mb():
             """Somma la dimensione reale su disco dei file di questo episodio
@@ -274,6 +294,20 @@ class DownloadManager:
                 except OSError:
                     pass
 
+        def discard_partial_download():
+            """Stop dell'utente: elimina quanto scaricato finora di questo
+            elemento e le cartelle rimaste vuote (es. "Stagione 01" appena
+            creata). Riprova qualche volta perche' su Windows i file possono
+            restare bloccati per un attimo dopo il kill dei processi."""
+            for _ in range(10):
+                cleanup_partial_files()
+                if not (glob.glob(os.path.join(dest_dir, f"{filename}.video.*"))
+                        or glob.glob(os.path.join(dest_dir, f"{filename}.audio.*"))):
+                    break
+                time.sleep(0.3)
+            self._remove_empty_dirs(dest_dir, self.output_folder)
+            return False
+
         MAX_ATTEMPTS = 3
         streams = None
         cmds = {}
@@ -282,14 +316,14 @@ class DownloadManager:
 
         for attempt in range(1, MAX_ATTEMPTS + 1):
             if self._stop_flag:
-                return
+                return discard_partial_download()
             if attempt > 1:
                 # Breve attesa prima di ritentare (non bloccante rispetto allo
                 # stop): da' tempo al CDN di smettere di limitare le
                 # connessioni invece di ripresentarsi identico subito dopo.
                 for _ in range(20):
                     if self._stop_flag:
-                        return
+                        return discard_partial_download()
                     time.sleep(0.2)
                 cleanup_partial_files()
 
@@ -421,7 +455,7 @@ class DownloadManager:
                         self._current_processes.remove(s["process"])
 
             if self._stop_flag:
-                return
+                return discard_partial_download()
 
             cmds = {key: s["cmd"] for key, s in streams.items()}
             last_video_rc = streams["video"]["process"].returncode
@@ -481,3 +515,4 @@ class DownloadManager:
         size_mb = disk_size_mb()  # ora resta solo il file finale unito
         if size_mb:
             item["size_mb"] = size_mb
+        return True

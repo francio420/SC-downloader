@@ -1,5 +1,7 @@
 import json
 import os
+import subprocess
+import sys
 import threading
 import tkinter as tk
 from tkinter import messagebox
@@ -179,6 +181,7 @@ class ScDownloaderApp(tk.Tk):
         self.bind_all("<Control-f>", focus_search)
         self.bind_all("<Control-k>", focus_search)
         self.bind_all("<slash>", lambda e: None if typing(e) else focus_search())
+        self.bind_all("<Control-o>", lambda e: self.open_folder())
         self.bind_all("<Control-Key-1>", lambda e: self.show("search"))
         self.bind_all("<Control-Key-2>", lambda e: self.show("downloads"))
         self.bind_all("<Control-Key-3>", lambda e: self.show("settings"))
@@ -258,7 +261,7 @@ class ScDownloaderApp(tk.Tk):
         queue = self.download_manager.queue
         errors = sum(1 for i in queue if i["status"] == "errore")
         if self._stopping:
-            self.toast("Download interrotti", "warning")
+            self.toast("Download interrotti: i file parziali sono stati eliminati", "warning")
         elif errors:
             self.toast(f"Download terminati con {errors} error{'e' if errors == 1 else 'i'}: "
                        f"dettagli in .sc_debug.log", "error", 6000)
@@ -267,6 +270,25 @@ class ScDownloaderApp(tk.Tk):
             self.bell()
         self._stopping = False
         self.views["downloads"].tick()
+
+    def open_folder(self, path=None):
+        """Apre la cartella nel file manager di sistema (di default quella di
+        destinazione). Se non esiste piu', apre il primo genitore esistente."""
+        path = path or self.output_folder
+        while path and not os.path.isdir(path):
+            parent = os.path.dirname(path)
+            if parent == path:
+                break
+            path = parent
+        try:
+            if sys.platform == "win32":
+                os.startfile(path)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as e:
+            self.toast(f"Impossibile aprire la cartella: {e}", "error")
 
     def choose_folder(self):
         start_dir = self.output_folder if os.path.isdir(self.output_folder) else os.path.expanduser("~")
