@@ -23,10 +23,18 @@ class ScDownloaderApp(tk.Tk):
     (Scopri → Dettaglio titolo, Download, Impostazioni)."""
 
     TICK_MS = 300
+    ICON_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "icon.png")
 
     def __init__(self):
-        super().__init__()
+        # className determina il WM_CLASS della finestra ("Sc-downloader"),
+        # che il .desktop usa (StartupWMClass) per associarle la sua icona.
+        super().__init__(className="sc-downloader")
         self.title("SC Downloader")
+        try:
+            self._icon = tk.PhotoImage(file=self.ICON_FILE)
+            self.iconphoto(True, self._icon)
+        except tk.TclError:
+            pass
         self.geometry("1240x820")
         self.minsize(960, 620)
         T.setup_styles(self)

@@ -22,6 +22,8 @@ sc_downloader/
     views.py                     # the pages: SearchView, DetailView, DownloadsView, SettingsView (+ their cards)
     folder_dialog.py             # FolderBrowserDialog
     app.py                       # ScDownloaderApp (the Tk root: nav rail, page switching, queue actions) + main()
+    assets/icon.svg, icon.png    # app logo (same as the nav rail logo); PNG is rendered from the SVG with
+                                 # `rsvg-convert -w 256 -h 256 icon.svg -o icon.png` (Tk 8.6 can't read SVG)
 ```
 
 `sc_downloader/` was split out of a single ~1150-line `sc_downloader.py` along its existing class boundaries,
@@ -160,4 +162,6 @@ cards track `id(item)` of `download_manager.queue` dicts, and removing an in-pro
 calls `kill_current()` (stops the whole batch, see above). For movies `DetailView` hides the season/episode list and the action bar
 enqueues the title itself (`get_title` returns `loadedSeason: null` for them). `FolderBrowserDialog` is a
 themed custom folder picker replacing the native OS dialog (which doesn't match the app's theme and can't be
-restyled from Tkinter).
+restyled from Tkinter). The root is created with `className="sc-downloader"` so the window's WM_CLASS is
+`Sc-downloader`, matching `StartupWMClass` in the (gitignored, per-machine) `.desktop` launcher so the desktop
+associates the window with the launcher's icon; the window icon itself is set via `iconphoto`.

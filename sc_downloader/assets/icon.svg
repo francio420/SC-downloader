@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Stesso logo della barra laterale dell'app (vedi ScDownloaderApp._build_ui) -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#9d8fff"/>
+      <stop offset="1" stop-color="#7563f5"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="24" width="216" height="216" rx="60" fill="url(#bg)"/>
+  <path d="M98 82 L178 132 L98 182 Z" fill="#0d0d14" stroke="#0d0d14" stroke-width="18" stroke-linejoin="round"/>
+  <circle cx="214" cy="42" r="30" fill="#2dd4ee" stroke="#0d0d14" stroke-width="10"/>
+</svg>
