@@ -2,12 +2,13 @@ import json
 import os
 import subprocess
 import sys
-import threading
 import tkinter as tk
+from concurrent.futures import ThreadPoolExecutor
 from tkinter import messagebox
 
 from . import images
 from . import theme as T
+from .api import StreamingCommunityAPI
 from .constants import ROOT_DIR, SETTINGS_FILE
 from .download_manager import DownloadManager
 from .folder_dialog import FolderBrowserDialog
@@ -49,6 +50,7 @@ class ScDownloaderApp(tk.Tk):
         self.toasts = ToastHost(self)
         self._stopping = False
         self._ticks = 0
+        self._last_queued = {}
 
         self._build_ui()
         self._bind_shortcuts()
@@ -162,7 +164,11 @@ class ScDownloaderApp(tk.Tk):
         self.toasts.show(text, kind, duration)
 
     def run_async(self, fn, on_done, on_error=None):
-        """Esegue fn in un thread e riporta il risultato sul thread Tk."""
+        """Esegue fn nel pool di rete della UI e riporta il risultato sul
+        thread Tk. Il pool ha thread fissi (non uno nuovo per richiesta):
+        curl_cffi tiene un handle libcurl per thread, quindi riusare i thread
+        riusa anche la connessione HTTPS invece di rifare ogni volta
+        l'handshake TLS (~60-100 ms in piu' a richiesta, misurati)."""
         def work():
             try:
                 result = fn()
@@ -172,7 +178,7 @@ class ScDownloaderApp(tk.Tk):
                 return
             self.after(0, on_done, result)
 
-        threading.Thread(target=work, daemon=True).start()
+        self._ui_pool.submit(work)
 
     # ── Scorciatoie ──────────────────────────────────────────────────────────
 
@@ -209,7 +215,11 @@ class ScDownloaderApp(tk.Tk):
             max_parallel_episodes=self.max_parallel_episodes,
             concurrent_fragments=self.concurrent_fragments,
         )
-        self.api = self.download_manager.api
+        # Sessione separata da quella dei download: la navigazione nella UI non
+        # condivide cookie/connessioni con i download in corso.
+        self.api = StreamingCommunityAPI()
+        # 2 thread: un caricamento lento non blocca una nuova ricerca.
+        self._ui_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ui-net")
 
     def queued_episodes(self):
         return {(i["title_id"], i["episode_id"]): i["status"] for i in self.download_manager.queue}
@@ -330,7 +340,11 @@ class ScDownloaderApp(tk.Tk):
                 self.rail_status.pack(side="bottom", pady=(0, 16))
             else:
                 self.rail_status.pack_forget()
-        if self.current_view == "detail" and dm.is_downloading and self._ticks % 5 == 0:
+        # Le etichette IN CODA / IN CORSO / SCARICATO del dettaglio cambiano
+        # solo con lo stato della coda: si ridisegna solo in quel caso.
+        queued = self.queued_episodes()
+        if queued != self._last_queued:
+            self._last_queued = queued
             self.views["detail"]._redraw_rows()
         self.after(self.TICK_MS, self._tick)
 

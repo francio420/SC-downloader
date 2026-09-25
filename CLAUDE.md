@@ -118,8 +118,9 @@ left empty (`_remove_empty_dirs`, never above `output_folder`), then returns `Fa
 item to `in_coda`. `_download_one` returns `True` on success — a stop arriving during the final ffmpeg merge
 still yields a complete file, so that item is marked `completato`, not reset.
 
-**Threading model**: Tk main thread (plus `ScDownloaderApp.run_async` threads for search/title/season requests
-and `ImageLoader`'s pool for images — both hand results back via `after(0, ...)`); one `_download_loop` background thread owning a `ThreadPoolExecutor`
+**Threading model**: Tk main thread (plus `ScDownloaderApp._ui_pool`, 2 persistent threads behind `run_async`
+for search/title/season requests, and `ImageLoader`'s pool for images — both hand results back via
+`after(0, ...)`); one `_download_loop` background thread owning a `ThreadPoolExecutor`
 (size `max_parallel_episodes`) whose workers each run one episode's `_download_one`; and two `reader` threads
 per *currently downloading* episode (one per subprocess' stdout) — so up to `2 * max_parallel_episodes` reader
 threads at once. Any GUI widget mutation from a background thread goes through `self.after(0, ...)` — never
@@ -127,6 +128,13 @@ touch a widget directly from `_download_loop`/`worker`/`reader`/the search threa
 `progress_callback` (it's left as the default no-op): `ScDownloaderApp._tick` polls `download_manager.queue`
 every 300 ms and updates cards/ring/badge/speed graph, so redraw cost is constant regardless of how many
 subprocesses report progress.
+
+**HTTP sessions**: three separate `curl_cffi` sessions — the UI's own `ScDownloaderApp.api`, the download
+manager's `api`/`scrape` pair (shared with its worker threads), and `ImageLoader._session`. curl_cffi's `Session`
+keeps one libcurl handle *per thread* (thread-local), which is what makes sharing a session across threads safe
+(a single libcurl handle must never be used by two threads at once) — but it also means a brand-new thread gets
+a brand-new handle and pays a fresh TLS handshake. That's why UI/image requests run on *persistent* pools rather
+than a thread per request (measured: ~205 ms vs 260–335 ms per search; 40 posters 152 ms vs 393 ms).
 
 **Movies** reuse the exact same pipeline: queue items with `kind: "movie"` and `episode_id: None`, for which
 `ScrapeEngine.build_m3u8` omits `?episode_id=` from the iframe URL. Movie playlists can carry several audio

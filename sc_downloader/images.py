@@ -25,7 +25,11 @@ class ImageLoader:
     def __init__(self, root):
         self.root = root
         self.cdn_url = None
-        self._pool = ThreadPoolExecutor(max_workers=6)
+        self._pool = ThreadPoolExecutor(max_workers=6, thread_name_prefix="images")
+        # Una Session (un handle libcurl per thread del pool) riusa le
+        # connessioni al CDN tra un'immagine e l'altra; curl_requests.get()
+        # ne aprirebbe una nuova, con handshake TLS, per ogni immagine.
+        self._session = curl_requests.Session(impersonate="chrome")
         self._photos = {}
         self._raw = {}
         self._raw_lock = threading.Lock()
@@ -71,7 +75,7 @@ class ImageLoader:
         with self._raw_lock:
             data = self._raw.get(url)
         if data is None:
-            resp = curl_requests.get(url, impersonate="chrome", timeout=20, headers={"User-Agent": USER_AGENT})
+            resp = self._session.get(url, timeout=20, headers={"User-Agent": USER_AGENT})
             resp.raise_for_status()
             data = resp.content
             with self._raw_lock:
