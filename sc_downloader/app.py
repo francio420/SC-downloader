@@ -147,6 +147,11 @@ class ScDownloaderApp(tk.Tk):
             self.views[self.current_view].pack_forget()
         self.views[name].pack(fill="both", expand=True)
         self.current_view = name
+        # Toglie il focus da widget ormai nascosti (tipicamente la barra di
+        # ricerca): altrimenti i tasti continuano ad andare li' e le
+        # scorciatoie di pagina (Ctrl+A, Invio) vengono scambiate per testo.
+        if name != "search":
+            self.views[name].focus_set()
         nav_key = "search" if name == "detail" else name
         for key, button in self.nav.items():
             button.set_active(key == nav_key)
@@ -200,8 +205,10 @@ class ScDownloaderApp(tk.Tk):
         self.bind_all("<Control-Key-2>", lambda e: self.show("downloads"))
         self.bind_all("<Control-Key-3>", lambda e: self.show("settings"))
         self.bind_all("<Escape>", lambda e: self.show("search") if self.current_view == "detail" else None)
-        self.bind_all("<Control-a>", lambda e: self.views["detail"].select_all()
-                      if self.current_view == "detail" and not typing(e) else None)
+        # Anche la variante maiuscola: con Bloc Maiusc attivo Tk riceve Control-A
+        for seq in ("<Control-a>", "<Control-A>"):
+            self.bind_all(seq, lambda e: self.views["detail"].select_all()
+                          if self.current_view == "detail" and not typing(e) else None)
         self.bind_all("<Return>", lambda e: self.views["detail"].add_selected(False)
                       if self.current_view == "detail" and not typing(e) else None)
 

@@ -460,6 +460,10 @@ class SearchBar(tk.Canvas):
         self.entry.bind("<FocusOut>", lambda e: self._set_focus(False))
         self.entry.bind("<Return>", lambda e: self.command(self.get()))
         self.entry.bind("<Escape>", lambda e: self.var.set(""))
+        # Nel campo di ricerca Ctrl+A seleziona tutto il testo (di default in
+        # Tk sposta il cursore a inizio riga, alla emacs)
+        for seq in ("<Control-a>", "<Control-A>"):
+            self.entry.bind(seq, lambda e: (self.entry.select_range(0, "end"), self.entry.icursor("end"), "break")[-1])
         self.var.trace_add("write", lambda *a: self._sync_placeholder())
 
     def get(self):
