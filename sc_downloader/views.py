@@ -363,7 +363,7 @@ class DetailView(tk.Frame):
 
         outer = tk.Frame(self.scroll.inner, bg=T.BG)
         outer.pack(fill="x", padx=(32, 24), pady=(12, 28))
-        self.notice = tk.Label(outer, text="", bg=T.BG, fg=T.MUTED, font=T.font(11), justify="left")
+        self.notice = tk.Label(outer, text="", bg=T.BG, fg=T.MUTED, font=T.font(10), justify="left")
         self.series_box = body = tk.Frame(outer, bg=T.BG)
         body.pack(fill="x")
         head = tk.Frame(body, bg=T.BG)
@@ -395,8 +395,10 @@ class DetailView(tk.Frame):
         self.sel_label.pack(anchor="w")
         self.sel_sub = tk.Label(info, text="", bg=T.SURFACE, fg=T.MUTED, font=T.font(9))
         self.sel_sub.pack(anchor="w")
-        Button(inner, "Tutti", command=self.select_all, variant="flat", height=32).pack(side="left", padx=(20, 0))
-        Button(inner, "Nessuno", command=self.select_none, variant="flat", height=32).pack(side="left")
+        self.sel_tools = tk.Frame(inner, bg=T.SURFACE)
+        self.sel_tools.pack(side="left", padx=(20, 0))
+        Button(self.sel_tools, "Tutti", command=self.select_all, variant="flat", height=32).pack(side="left")
+        Button(self.sel_tools, "Nessuno", command=self.select_none, variant="flat", height=32).pack(side="left")
         self.btn_now = Button(inner, "Scarica ora", icon="download", command=lambda: self.add_selected(True),
                               variant="primary", height=40)
         self.btn_now.pack(side="right")
@@ -411,6 +413,7 @@ class DetailView(tk.Frame):
         self._req += 1
         req = self._req
         self.summary, self.data, self.season = summary, None, None
+        self.movie = False
         self.hero_photo = self.poster_photo = None
         self.crumb.config(text=f"/  {summary['name']}")
         for chip in self.season_flow.winfo_children():
@@ -471,18 +474,19 @@ class DetailView(tk.Frame):
         self._show_episodes(data.get("episodes", []), loaded)
 
     def _set_movie_mode(self, movie):
-        """I film non hanno stagioni/episodi e il downloader gestisce solo
-        episodi di serie: al posto della lista si mostra un avviso."""
+        """I film non hanno stagioni/episodi: niente lista, la barra azioni
+        scarica direttamente il titolo."""
+        self.movie = movie
         if movie:
             self.series_box.pack_forget()
-            self.action_bar.pack_forget()
-            self.notice.config(text="Questo titolo è un film: al momento SC Downloader scarica solo gli "
-                                    "episodi delle serie TV.")
+            self.sel_tools.pack_forget()
+            self.notice.config(text=f"Il film verrà salvato in  {os.path.join(self.app.output_folder, 'Film')}")
             self.notice.pack(anchor="w", pady=10)
         else:
             self.notice.pack_forget()
-            self.action_bar.pack(side="bottom", fill="x", before=self.scroll)
+            self.sel_tools.pack(side="left", padx=(20, 0), after=self.sel_label.master)
             self.series_box.pack(fill="x")
+        self._update_action_bar()
 
     def _mark_season(self, number):
         self.season = number
@@ -601,6 +605,17 @@ class DetailView(tk.Frame):
         self._update_action_bar()
 
     def _update_action_bar(self):
+        if getattr(self, "movie", False):
+            info = self.data or self.summary
+            status = self.app.queued_episodes().get((info["id"], None)) if self.data else None
+            runtime = f"  ·  {format_minutes(info['runtime'])}" if info.get("runtime") else ""
+            self.sel_label.config(text=f"Film{runtime}")
+            self.sel_sub.config(text={"in_coda": "Già in coda", "in_corso": "Download in corso",
+                                      "completato": "Già scaricato"}.get(status, "Film completo, audio italiano"))
+            ready = self.data is not None and status not in ("in_coda", "in_corso", "completato")
+            self.btn_now.set_enabled(ready)
+            self.btn_queue.set_enabled(ready)
+            return
         n = len(self.selected)
         if n:
             minutes = sum(self.episodes[i].get("duration") or 0 for i in self.selected)
@@ -613,6 +628,20 @@ class DetailView(tk.Frame):
         self.btn_queue.set_enabled(bool(n))
 
     def add_selected(self, start_now):
+        if self.movie and self.data:
+            year = (self.data.get("release_date") or "")[:4]
+            self.app.enqueue([{
+                "kind": "movie",
+                "title_name": self.data["name"],
+                "title_id": self.data["id"],
+                "episode_id": None,
+                "season": 0,
+                "episode": 0,
+                "episode_name": "",
+                "year": year,
+                "duration": self.data.get("runtime") or 0,
+            }], start_now)
+            return
         if not self.selected or not self.data:
             return
         items = []
@@ -686,7 +715,10 @@ class QueueCard(tk.Canvas):
         tf = T.font(11, "bold")
         self.create_text(x, 18, text=T.ellipsize(i["title_name"], tf, w - x - 250), anchor="nw", fill=T.TEXT,
                          font=tf)
-        sub = f"S{i['season']:02d}E{i['episode']:02d}"
+        if i.get("kind") == "movie":
+            sub = "  ·  ".join(p for p in ("Film", i.get("year"), format_minutes(i.get("duration"))) if p)
+        else:
+            sub = f"S{i['season']:02d}E{i['episode']:02d}"
         if i.get("episode_name"):
             sub += f"  ·  {i['episode_name']}"
         self.create_text(x, 40, text=T.ellipsize(sub, T.font(9), w - x - 250), anchor="nw", fill=T.MUTED,
@@ -910,7 +942,7 @@ class SettingsView(tk.Frame):
 
         # Cartella
         card = self._card(body, "Cartella di destinazione",
-                          "I file vengono salvati in  <cartella>/<Nome serie>/Stagione NN/")
+                          "Serie:  <cartella>/<Nome serie>/Stagione NN/     Film:  <cartella>/Film/")
         row = tk.Frame(card, bg=T.SURFACE)
         row.pack(fill="x", pady=(12, 0))
         self.folder_label = tk.Label(row, text="", bg=T.SURFACE_2, fg=T.TEXT, font=T.font(10), anchor="w",

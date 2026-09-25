@@ -212,13 +212,15 @@ class ScDownloaderApp(tk.Tk):
             self.download_manager.add(item)
             added += 1
         skipped = len(items) - added
-        if added:
+        if added and all(i.get("kind") == "movie" for i in items):
+            msg = "Film aggiunto alla coda"
+        elif added:
             msg = f"{added} episod{'io aggiunto' if added == 1 else 'i aggiunti'} alla coda"
             if skipped:
                 msg += f" ({skipped} già present{'e' if skipped == 1 else 'i'})"
             self.toast(msg, "success")
         elif skipped:
-            self.toast("Gli episodi selezionati sono già in coda", "info")
+            self.toast("Già presente in coda", "info")
         self.views["downloads"].tick()
         self.views["detail"]._redraw_rows()
         if start_now:

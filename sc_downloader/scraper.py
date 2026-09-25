@@ -14,10 +14,13 @@ class ScrapeEngine:
     def __init__(self, session=None):
         self.session = session or curl_requests.Session(impersonate="chrome")
 
-    def build_m3u8(self, title_id, episode_id):
-        """Costruisce l'URL M3U8 partendo dal title_id e episode_id."""
+    def build_m3u8(self, title_id, episode_id=None):
+        """Costruisce l'URL M3U8 partendo dal title_id e episode_id (None per
+        i film, che hanno un solo video per titolo)."""
         # Step 1: Fetch the iframe page to get the vixcloud embed URL
-        iframe_url = f"{BASE_URL}/it/iframe/{title_id}?episode_id={episode_id}"
+        iframe_url = f"{BASE_URL}/it/iframe/{title_id}"
+        if episode_id is not None:
+            iframe_url += f"?episode_id={episode_id}"
         resp_html = self.session.get(
             iframe_url,
             headers={"User-Agent": USER_AGENT, "Referer": f"{BASE_URL}/it/watch/{title_id}"},

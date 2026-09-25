@@ -122,7 +122,14 @@ touch a widget directly from `_download_loop`/`worker`/`reader`/the search threa
 every 300 ms and updates cards/ring/badge/speed graph, so redraw cost is constant regardless of how many
 subprocesses report progress.
 
-**Output layout is always `<output_folder>/<Series Name>/Stagione NN/`**, even for a single-season queue —
+**Movies** reuse the exact same pipeline: queue items with `kind: "movie"` and `episode_id: None`, for which
+`ScrapeEngine.build_m3u8` omits `?episode_id=` from the iframe URL. Movie playlists can carry several audio
+renditions (e.g. English + Italian), so the audio format is `bestaudio[language=ita]/bestaudio` rather than
+relying on yt-dlp's notion of "best". Use `DownloadManager.item_label()` for any human-readable item name
+(status line, debug log) instead of formatting `SxxEyy` directly. Movies are saved flat as
+`<output_folder>/Film/<Title (Year)>.mp4`.
+
+**Series output layout is always `<output_folder>/<Series Name>/Stagione NN/`**, even for a single-season queue —
 this is intentional so downloading seasons across separate sessions doesn't split a series across a flat
 folder and nested ones. `DownloadManager._resolve_dir()` reuses an existing folder case-insensitively instead
 of creating a duplicate with different casing.
@@ -145,7 +152,7 @@ window managers can size the window shorter than its natural content height, cli
 previously-reported failure mode, not defensive boilerplate. `ScrollFrame` routes the mouse wheel globally to
 whichever ScrollFrame is under the pointer. Episode selection, queue and results are keyed by identity: queue
 cards track `id(item)` of `download_manager.queue` dicts, and removing an in-progress item confirms and then
-calls `kill_current()` (stops the whole batch, see above). Movies are shown but not downloadable (the manager
-only handles series episodes; `get_title` returns `loadedSeason: null` for them). `FolderBrowserDialog` is a
+calls `kill_current()` (stops the whole batch, see above). For movies `DetailView` hides the season/episode list and the action bar
+enqueues the title itself (`get_title` returns `loadedSeason: null` for them). `FolderBrowserDialog` is a
 themed custom folder picker replacing the native OS dialog (which doesn't match the app's theme and can't be
 restyled from Tkinter).

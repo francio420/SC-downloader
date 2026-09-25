@@ -64,7 +64,8 @@ class DownloadManager:
                     process.kill()
 
     def add(self, item):
-        """Aggiunge un episodio alla coda. item = {title_name, season, episode, episode_name, scws_id, duration}"""
+        """Aggiunge un elemento alla coda. Episodio: {title_name, title_id, season, episode, episode_id,
+        episode_name, duration}; film: {kind: "movie", title_name, title_id, episode_id: None, year, duration}."""
         item["status"] = "in_coda"
         item["progress"] = 0
         item["video_progress"] = 0
@@ -143,7 +144,7 @@ class DownloadManager:
         done = sum(1 for i in self.queue if i["status"] == "completato")
         if not active:
             return f"{done}/{len(self.queue)} completati"
-        titles = ", ".join(f"{i['title_name']} S{i['season']:02d}E{i['episode']:02d}" for i in active)
+        titles = ", ".join(self.item_label(i) for i in active)
         return f"In corso ({len(active)}): {titles} — {done}/{len(self.queue)} completati"
 
     def _overall_progress(self):
@@ -151,6 +152,13 @@ class DownloadManager:
         if not self.queue:
             return 0
         return sum(i.get("progress", 0) for i in self.queue) / len(self.queue)
+
+    @staticmethod
+    def item_label(item):
+        """"Serie S01E02" per gli episodi, "Film (2010)" per i film."""
+        if item.get("kind") == "movie":
+            return f"{item['title_name']} ({item['year']})" if item.get("year") else item["title_name"]
+        return f"{item['title_name']} S{item.get('season', 0):02d}E{item.get('episode', 0):02d}"
 
     @staticmethod
     def _resolve_dir(parent, name):
@@ -175,7 +183,7 @@ class DownloadManager:
             with open(DEBUG_LOG_FILE, "a", encoding="utf-8") as f:
                 f.write("=" * 80 + "\n")
                 f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - "
-                        f"{item.get('title_name')} S{item.get('season', 0):02d}E{item.get('episode', 0):02d}\n")
+                        f"{DownloadManager.item_label(item)}\n")
                 for label, cmd in cmds.items():
                     f.write(f"\n[{label}] comando:\n  {' '.join(cmd)}\n")
                 for label, output in outputs.items():
@@ -193,17 +201,22 @@ class DownloadManager:
         # "bestaudio" non trovano nulla e si scarica un unico stream "best".
         muxed = not self.scrape.has_separate_audio(m3u8_url)
 
-        safe_name = re.sub(r'[<>:"/\\|?*]', '_', item["title_name"])
-        filename = f"{safe_name}_S{item['season']:02d}E{item['episode']:02d}"
+        if item.get("kind") == "movie":
+            # Film: <output>/Film/<Titolo (Anno)>.mp4, tutti insieme e separati
+            # dalle cartelle delle serie.
+            filename = re.sub(r'[<>:"/\\|?*]', '_', self.item_label(item))
+            dest_dir = self._resolve_dir(self.output_folder, "Film")
+        else:
+            safe_name = re.sub(r'[<>:"/\\|?*]', '_', item["title_name"])
+            filename = f"{safe_name}_S{item['season']:02d}E{item['episode']:02d}"
+            # Cartella <output>/<Serie>/<Stagione NN>/, sempre, cosi' la struttura
+            # resta coerente anche scaricando le stagioni in sessioni separate
+            # (altrimenti scaricare una stagione alla volta non creerebbe mai la
+            # sottocartella, mescolando le stagioni nella cartella della serie).
+            # Riusa cartelle gia' esistenti (case-insensitive) invece di duplicarle.
+            dest_dir = self._resolve_dir(self.output_folder, safe_name)
+            dest_dir = self._resolve_dir(dest_dir, f"Stagione {item['season']:02d}")
         item["filename"] = filename
-
-        # Cartella <output>/<Serie>/<Stagione NN>/, sempre, cosi' la struttura
-        # resta coerente anche scaricando le stagioni in sessioni separate
-        # (altrimenti scaricare una stagione alla volta non creerebbe mai la
-        # sottocartella, mescolando le stagioni nella cartella della serie).
-        # Riusa cartelle gia' esistenti (case-insensitive) invece di duplicarle.
-        dest_dir = self._resolve_dir(self.output_folder, safe_name)
-        dest_dir = self._resolve_dir(dest_dir, f"Stagione {item['season']:02d}")
 
         def disk_size_mb():
             """Somma la dimensione reale su disco dei file di questo episodio
@@ -294,7 +307,11 @@ class DownloadManager:
                     },
                     "audio": {
                         "template": os.path.join(dest_dir, f"{filename}.audio.%(ext)s"),
-                        "format": "bestaudio",
+                        # Alcuni titoli (spesso i film) hanno piu' tracce
+                        # audio (es. inglese + italiano): si preferisce
+                        # esplicitamente l'italiano invece di affidarsi a
+                        # quale traccia yt-dlp considera "migliore".
+                        "format": "bestaudio[language=ita]/bestaudio",
                     },
                 }
             for key, s in streams.items():

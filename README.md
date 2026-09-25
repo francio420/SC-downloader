@@ -40,9 +40,10 @@ python main.py
 python -m sc_downloader
 ```
 
-1. In **Scopri** scrivi il nome di una serie TV e premi Invio
+1. In **Scopri** scrivi il nome di una serie TV o di un film e premi Invio
 2. Clicca sulla locandina del titolo
-3. Scegli la stagione e clicca sugli episodi (Maiusc+clic per un intervallo, Ctrl+A per tutti)
+3. Per una serie scegli la stagione e clicca sugli episodi (Maiusc+clic per un intervallo, Ctrl+A per tutti);
+   per un film non serve selezionare nulla
 4. Clicca "Aggiungi alla coda" oppure "Scarica ora"
 5. Segui l'avanzamento nella sezione **Download**, dove puoi anche cambiare cartella
 
