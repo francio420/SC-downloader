@@ -203,18 +203,19 @@ class DownloadManager:
 
         if item.get("kind") == "movie":
             # Film: <output>/Film/<Titolo (Anno)>.mp4, tutti insieme e separati
-            # dalle cartelle delle serie.
+            # dalla cartella "Serie TV".
             filename = re.sub(r'[<>:"/\\|?*]', '_', self.item_label(item))
             dest_dir = self._resolve_dir(self.output_folder, "Film")
         else:
             safe_name = re.sub(r'[<>:"/\\|?*]', '_', item["title_name"])
             filename = f"{safe_name}_S{item['season']:02d}E{item['episode']:02d}"
-            # Cartella <output>/<Serie>/<Stagione NN>/, sempre, cosi' la struttura
+            # Cartella <output>/Serie TV/<Serie>/<Stagione NN>/, sempre, cosi' la struttura
             # resta coerente anche scaricando le stagioni in sessioni separate
             # (altrimenti scaricare una stagione alla volta non creerebbe mai la
             # sottocartella, mescolando le stagioni nella cartella della serie).
             # Riusa cartelle gia' esistenti (case-insensitive) invece di duplicarle.
-            dest_dir = self._resolve_dir(self.output_folder, safe_name)
+            dest_dir = self._resolve_dir(self.output_folder, "Serie TV")
+            dest_dir = self._resolve_dir(dest_dir, safe_name)
             dest_dir = self._resolve_dir(dest_dir, f"Stagione {item['season']:02d}")
         item["filename"] = filename
 

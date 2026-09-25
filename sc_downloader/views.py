@@ -942,7 +942,7 @@ class SettingsView(tk.Frame):
 
         # Cartella
         card = self._card(body, "Cartella di destinazione",
-                          "Serie:  <cartella>/<Nome serie>/Stagione NN/     Film:  <cartella>/Film/")
+                          "Serie:  <cartella>/Serie TV/<Nome serie>/Stagione NN/     Film:  <cartella>/Film/")
         row = tk.Frame(card, bg=T.SURFACE)
         row.pack(fill="x", pady=(12, 0))
         self.folder_label = tk.Label(row, text="", bg=T.SURFACE_2, fg=T.TEXT, font=T.font(10), anchor="w",

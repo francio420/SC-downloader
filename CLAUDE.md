@@ -129,7 +129,8 @@ relying on yt-dlp's notion of "best". Use `DownloadManager.item_label()` for any
 (status line, debug log) instead of formatting `SxxEyy` directly. Movies are saved flat as
 `<output_folder>/Film/<Title (Year)>.mp4`.
 
-**Series output layout is always `<output_folder>/<Series Name>/Stagione NN/`**, even for a single-season queue —
+**Series output layout is always `<output_folder>/Serie TV/<Series Name>/Stagione NN/`** (parallel to
+`Film/`), even for a single-season queue —
 this is intentional so downloading seasons across separate sessions doesn't split a series across a flat
 folder and nested ones. `DownloadManager._resolve_dir()` reuses an existing folder case-insensitively instead
 of creating a duplicate with different casing.
