@@ -16,14 +16,18 @@ sc_downloader/
     api.py                       # StreamingCommunityAPI
     scraper.py                   # ScrapeEngine
     download_manager.py          # DownloadManager (the core download/threading logic)
+    theme.py                     # palette, font picking, text measuring/ellipsizing, ttk style setup
+    images.py                    # ImageLoader (threaded CDN fetch + Pillow processing, Pillow optional)
+    widgets.py                   # Canvas-drawn reusable widgets (Button, Chip, ScrollFrame, ProgressRing, ...)
+    views.py                     # the pages: SearchView, DetailView, DownloadsView, SettingsView (+ their cards)
     folder_dialog.py             # FolderBrowserDialog
-    settings_dialog.py           # SettingsDialog (parallel episodes / concurrent fragments)
-    app.py                       # ScDownloaderApp (the Tk root) + main()
+    app.py                       # ScDownloaderApp (the Tk root: nav rail, page switching, queue actions) + main()
 ```
 
-`sc_downloader/` was split out of a single ~1150-line `sc_downloader.py` along its existing class boundaries —
-one module per class, no deeper nesting (no `gui/`/`core/` subpackages). Keep new code in the matching module
-rather than reintroducing a monolith; only `app.py` should import Tkinter widgets from outside `folder_dialog.py`.
+`sc_downloader/` was split out of a single ~1150-line `sc_downloader.py` along its existing class boundaries,
+no deeper nesting (no `gui/`/`core/` subpackages). Non-GUI logic (`api`, `scraper`, `download_manager`) never
+imports Tkinter; GUI code lives in `theme`/`widgets`/`views`/`folder_dialog`/`app`. Keep new code in the matching
+module rather than reintroducing a monolith.
 
 ## Commands
 
@@ -41,7 +45,9 @@ python3 -m venv .venv
 ./.venv/bin/pip install pyflakes && ./.venv/bin/python -m pyflakes main.py sc_downloader/  # then pip uninstall pyflakes
 ```
 
-`ffmpeg` must be on system `PATH` (not pip-installable). `.venv/` is gitignored — recreate it, don't assume it
+`ffmpeg` must be on system `PATH` (not pip-installable). `Pillow` (in `requirements.txt`) is *optional* at
+runtime — it only decodes the CDN's `.webp` posters/covers; without it `images.AVAILABLE` is false, the UI draws
+placeholders and shows a one-time warning toast. It is deliberately not in `__init__.py`'s hard check. `.venv/` is gitignored — recreate it, don't assume it
 exists.
 
 There is no automated test suite. Verification in this repo has been manual: run the app and exercise it, or
@@ -106,11 +112,15 @@ instead of leaving orphaned downloads running after Stop/window-close. `kill_cur
 point for stopping — both the Stop button and the window-close handler (with a confirmation dialog if a
 download is active) route through it.
 
-**Threading model**: Tk main thread; one `_download_loop` background thread owning a `ThreadPoolExecutor`
+**Threading model**: Tk main thread (plus `ScDownloaderApp.run_async` threads for search/title/season requests
+and `ImageLoader`'s pool for images — both hand results back via `after(0, ...)`); one `_download_loop` background thread owning a `ThreadPoolExecutor`
 (size `max_parallel_episodes`) whose workers each run one episode's `_download_one`; and two `reader` threads
 per *currently downloading* episode (one per subprocess' stdout) — so up to `2 * max_parallel_episodes` reader
 threads at once. Any GUI widget mutation from a background thread goes through `self.after(0, ...)` — never
-touch a widget directly from `_download_loop`/`worker`/`reader`/the search threads.
+touch a widget directly from `_download_loop`/`worker`/`reader`/the search threads. The UI does **not** redraw on
+`progress_callback` (it's left as the default no-op): `ScDownloaderApp._tick` polls `download_manager.queue`
+every 300 ms and updates cards/ring/badge/speed graph, so redraw cost is constant regardless of how many
+subprocesses report progress.
 
 **Output layout is always `<output_folder>/<Series Name>/Stagione NN/`**, even for a single-season queue —
 this is intentional so downloading seasons across separate sessions doesn't split a series across a flat
@@ -125,11 +135,17 @@ and full `yt-dlp`/`ffmpeg` output whenever a download fails, so a failure can be
 instead of reproducing it). `ROOT_DIR` is also the default output folder. There's no download-history file —
 that feature (and its UI panel) was removed entirely; nothing tracks past completed downloads.
 
-**GUI notes**: single dark (Catppuccin-ish) Tk window via `ttk.Style`. A `tk.Menu` menu bar (`_build_menu`)
-holds "Impostazioni", opening `SettingsDialog` — on Linux this renders *inside* the window below the title bar,
-not in a desktop-global menu bar (that's a macOS/Qt-appmenu thing Tk doesn't implement). The whole layout below
-it is wrapped in a scrollable `Canvas` (`ScDownloaderApp._build_ui`) because tiling window managers can size
-the window shorter than its natural content height, clipping the bottom controls — this is a real,
-previously-reported failure mode, not defensive boilerplate. `FolderBrowserDialog` is a themed custom folder
-picker replacing the native OS dialog (which doesn't match the app's theme and can't be restyled from
-Tkinter).
+**GUI notes**: pure Tk, no extra GUI toolkit. Everything with rounded corners, gradients, icons or progress
+rings is drawn by hand on `tk.Canvas` (`widgets.py`) — icons are vector-drawn in `draw_icon`, not emoji, since
+color-emoji fonts render inconsistently and can crash Tk on X11. Tk has no alpha on widgets, so "transparent"
+tints are precomputed with `theme.blend`. Layout: a left nav rail (Scopri / Download / Opzioni, with a pending
+badge and a mini progress ring) and one page shown at a time; `DetailView` is a sub-page of Scopri. Settings are a
+page (auto-saved on change), not a dialog. Every page that can overflow uses `widgets.ScrollFrame`, because tiling
+window managers can size the window shorter than its natural content height, clipping controls — a real,
+previously-reported failure mode, not defensive boilerplate. `ScrollFrame` routes the mouse wheel globally to
+whichever ScrollFrame is under the pointer. Episode selection, queue and results are keyed by identity: queue
+cards track `id(item)` of `download_manager.queue` dicts, and removing an in-progress item confirms and then
+calls `kill_current()` (stops the whole batch, see above). Movies are shown but not downloadable (the manager
+only handles series episodes; `get_title` returns `loadedSeason: null` for them). `FolderBrowserDialog` is a
+themed custom folder picker replacing the native OS dialog (which doesn't match the app's theme and can't be
+restyled from Tkinter).

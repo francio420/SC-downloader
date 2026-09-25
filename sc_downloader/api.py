@@ -1,3 +1,4 @@
+import html
 import json
 import re
 
@@ -13,6 +14,9 @@ class StreamingCommunityAPI:
 
     def __init__(self):
         self.session = curl_requests.Session(impersonate="chrome")
+        # Base URL delle immagini (poster, copertine), letta dalle props della
+        # pagina: il dominio del CDN cambia insieme a quello del sito.
+        self.cdn_url = None
 
     def _headers(self):
         return {
@@ -25,7 +29,11 @@ class StreamingCommunityAPI:
         m = re.search(r'data-page="([^"]+)"', html)
         if not m:
             return None
-        return json.loads(m.group(1).replace("&quot;", '"').replace("&amp;", "&"))
+        data = json.loads(m.group(1).replace("&quot;", '"').replace("&amp;", "&"))
+        cdn_url = data.get("props", {}).get("cdn_url")
+        if cdn_url:
+            self.cdn_url = cdn_url.rstrip("/")
+        return data
 
     def search(self, query, page=1):
         """Cerca titoli. Restituisce lista di dict con id, name, type, score, slug, seasons_count."""
@@ -40,7 +48,7 @@ class StreamingCommunityAPI:
         for t in titles:
             results.append({
                 "id": t["id"],
-                "name": t["name"],
+                "name": html.unescape(t["name"]),
                 "slug": t["slug"],
                 "type": t.get("type", "tv"),
                 "score": t.get("score", "N/A"),
@@ -60,13 +68,21 @@ class StreamingCommunityAPI:
             return None
         props = data.get("props", {})
         title = props.get("title", {})
-        loaded_season = props.get("loadedSeason", {})
+        # Per i film loadedSeason e' null
+        loaded_season = props.get("loadedSeason") or {}
         seasons = title.get("seasons", [])
         episodes = loaded_season.get("episodes", [])
         return {
             "id": title.get("id", title_id),
-            "name": title.get("name", ""),
+            "name": html.unescape(title.get("name", "")),
             "slug": title.get("slug", slug),
+            "type": title.get("type", "tv"),
+            "plot": html.unescape(title.get("plot") or ""),
+            "score": title.get("score"),
+            "release_date": title.get("release_date") or title.get("last_air_date"),
+            "runtime": title.get("runtime"),
+            "genres": [g.get("name", "") for g in title.get("genres", []) if g.get("name")],
+            "images": title.get("images", []),
             "seasons": seasons,
             "loaded_season_number": loaded_season.get("number", 1),
             "episodes": episodes,

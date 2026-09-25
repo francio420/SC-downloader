@@ -30,7 +30,7 @@ if not exist ".venv\Scripts\python.exe" (
 
 :: Si controllano le dipendenze a ogni avvio (non solo alla creazione del
 :: venv), cosi' un'installazione interrotta viene ripresa al lancio successivo.
-".venv\Scripts\python.exe" -c "import curl_cffi, yt_dlp, Cryptodome" >nul 2>nul
+".venv\Scripts\python.exe" -c "import curl_cffi, yt_dlp, Cryptodome, PIL" >nul 2>nul
 if errorlevel 1 (
     echo Installo le dipendenze...
     ".venv\Scripts\python.exe" -m pip install --upgrade pip

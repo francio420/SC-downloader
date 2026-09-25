@@ -4,8 +4,9 @@ Scarica video da StreamingCommunity con ricerca integrata e interfaccia grafica.
 
 ## Funzionalita
 
-- **Ricerca integrata**: Cerca titoli direttamente dall'app
-- **Selettore episodi**: Scegli stagione e episodi da scaricare
+- **Ricerca integrata**: Cerca titoli direttamente dall'app, con griglia di locandine e filtri Serie/Film
+- **Selettore episodi**: Scegli stagione e episodi da scaricare (con copertine, trame, selezione a intervallo)
+- **Dashboard download**: anello di avanzamento, velocita' live con grafico, barre separate video/audio
 - **Coda download**: Aggiungi piu episodi, con piu' episodi scaricati in parallelo (configurabile in Impostazioni)
 - **Download parallelo**: video e audio di ogni episodio si scaricano contemporaneamente (poi uniti automaticamente)
 - **Download 1080p**: Scarica in massima qualita disponibile
@@ -14,6 +15,7 @@ Scarica video da StreamingCommunity con ricerca integrata e interfaccia grafica.
 
 - Python 3.10+
 - ffmpeg (nel PATH di sistema)
+- Pillow (installato da `requirements.txt`, serve per mostrare le locandine)
 
 ## Installazione
 
@@ -38,14 +40,15 @@ python main.py
 python -m sc_downloader
 ```
 
-1. Scrivi il nome di un film o serie TV nella barra di ricerca
-2. Seleziona il titolo dalla lista e clicca "Seleziona"
-3. Scegli la stagione e seleziona gli episodi
-4. Clicca "Aggiungi Selezionati alla Coda"
-5. Scegli la cartella di output e clicca "Scarica Tutti"
+1. In **Scopri** scrivi il nome di una serie TV e premi Invio
+2. Clicca sulla locandina del titolo
+3. Scegli la stagione e clicca sugli episodi (Maiusc+clic per un intervallo, Ctrl+A per tutti)
+4. Clicca "Aggiungi alla coda" oppure "Scarica ora"
+5. Segui l'avanzamento nella sezione **Download**, dove puoi anche cambiare cartella
 
-Dal menu **Impostazioni** in alto puoi configurare quanti episodi scaricare in
-parallelo e quanti frammenti concorrenti usare per ogni stream video/audio.
+Nella sezione **Opzioni** puoi configurare la cartella, quanti episodi scaricare
+in parallelo e quanti frammenti concorrenti usare per ogni stream video/audio.
+Scorciatoie: Ctrl+F cerca, Ctrl+1/2/3 cambia sezione, Esc torna ai risultati.
 
 ## Note
 
