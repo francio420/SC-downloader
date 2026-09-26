@@ -692,6 +692,13 @@ class QueueCard(tk.Canvas):
             self.tag_bind(tag, "<Button-1>", lambda e, a=action: a())
 
     def _set_hover_tag(self, tag):
+        # Il ridisegno cancella e ricrea tutti gli elementi: il canvas perde
+        # l'elemento sotto il puntatore, lo ri-sceglie e rimanda <Enter> sulla
+        # stessa icona. Senza questo controllo ogni <Enter> ridisegna e ne
+        # genera un altro, all'infinito, bloccando l'app appena il mouse
+        # passa sopra la X o la cartella di una card.
+        if tag == self.hover_tag:
+            return
         self.hover_tag = tag
         self.configure(cursor="hand2" if tag else "")
         self.refresh(force=True)
@@ -910,7 +917,7 @@ class DownloadsView(tk.Frame):
                                        "Questo episodio è in download: rimuoverlo interrompe tutti i download "
                                        "in corso. Continuare?", parent=self):
                 return
-            dm.kill_current()
+            self.app.stop_download()
         dm.remove(idx)
         self.tick()
 
@@ -929,7 +936,7 @@ class DownloadsView(tk.Frame):
             if not messagebox.askyesno("Download in corso", "Svuotare la coda interrompe i download in corso. "
                                        "Continuare?", parent=self):
                 return
-            dm.kill_current()
+            self.app.stop_download()
         dm.clear()
         self.tick()
 
