@@ -149,7 +149,10 @@ than a thread per request (measured: ~205 ms vs 260–335 ms per search; 40 post
 **Movies** reuse the exact same pipeline: queue items with `kind: "movie"` and `episode_id: None`, for which
 `ScrapeEngine.build_m3u8` omits `?episode_id=` from the iframe URL. Movie playlists can carry several audio
 renditions (e.g. English + Italian), so the audio format is `bestaudio[language=ita]/bestaudio` rather than
-relying on yt-dlp's notion of "best". Use `DownloadManager.item_label()` for any human-readable item name
+relying on yt-dlp's notion of "best" (used for episodes too). That can't help when there is no Italian at all: a
+just-released, not-yet-dubbed episode is a single muxed stream in the original language with Italian subtitles.
+The site flags it with `dub_ita=0, sub_ita=1` on the episode (and on the title for movies; `get_title` returns
+`dub_ita`/`sub_ita`/`original_language`) — ../SC-ServerforTV refuses to queue those. Use `DownloadManager.item_label()` for any human-readable item name
 (status line, debug log) instead of formatting `SxxEyy` directly. Movies are saved flat as
 `<output_folder>/Film/<Title (Year)>.mp4`.
 

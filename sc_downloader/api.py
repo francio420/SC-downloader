@@ -112,6 +112,11 @@ class StreamingCommunityAPI:
             "runtime": title.get("runtime"),
             "genres": [g.get("name", "") for g in title.get("genres", []) if g.get("name")],
             "images": title.get("images", []),
+            # Lingua (anche sui singoli episodi): dub_ita=0 + sub_ita=1 = solo audio originale coi sottotitoli
+            # (es. episodi appena usciti, non ancora doppiati). None se il sito non li riporta.
+            "dub_ita": title.get("dub_ita"),
+            "sub_ita": title.get("sub_ita"),
+            "original_language": title.get("original_language"),
             "seasons": seasons,
             "loaded_season_number": loaded_season.get("number", 1),
             "episodes": episodes,
