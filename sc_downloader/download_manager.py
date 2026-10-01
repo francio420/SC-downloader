@@ -23,8 +23,11 @@ class DownloadManager:
     """Gestisce la coda di download con threading."""
 
     def __init__(self, output_folder, progress_callback=None, status_callback=None, finished_callback=None,
-                 max_parallel_episodes=1, concurrent_fragments=4):
+                 max_parallel_episodes=1, concurrent_fragments=4, item_finished_callback=None):
         self.output_folder = output_folder
+        # Chiamata (dal thread del worker) con l'elemento appena completato, dopo il merge finale; item["dest_dir"]
+        # e item["filename"] danno il percorso del file. Un'eccezione qui non fa fallire il download.
+        self.item_finished_callback = item_finished_callback or (lambda item: None)
         self.progress_callback = progress_callback or (lambda *a: None)
         self.status_callback = status_callback or (lambda *a: None)
         self.finished_callback = finished_callback or (lambda *a: None)
@@ -127,6 +130,10 @@ class DownloadManager:
                 else:
                     item["status"] = "completato"
                     item["progress"] = 100
+                    try:
+                        self.item_finished_callback(item)
+                    except Exception:
+                        pass
             except Exception as e:
                 item["status"] = "errore"
                 item["error"] = str(e)

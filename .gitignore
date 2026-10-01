@@ -13,3 +13,4 @@ Thumbs.db
 .claude/settings.local.json
 *.desktop
 .directory
+*.egg-info/

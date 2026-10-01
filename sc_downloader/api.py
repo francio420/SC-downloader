@@ -44,20 +44,49 @@ class StreamingCommunityAPI:
             return [], 0
         titles = data.get("props", {}).get("titles", [])
         total = data.get("props", {}).get("totalCount", 0)
-        results = []
-        for t in titles:
-            results.append({
-                "id": t["id"],
-                "name": html.unescape(t["name"]),
-                "slug": t["slug"],
-                "type": t.get("type", "tv"),
-                "score": t.get("score", "N/A"),
-                "seasons_count": t.get("seasons_count", 0),
-                "sub_ita": t.get("sub_ita", 0),
-                "last_air_date": t.get("last_air_date"),
-                "images": t.get("images", []),
-            })
-        return results, total
+        return [self._summarize_title(t) for t in titles], total
+
+    @staticmethod
+    def _summarize_title(t):
+        """Riga di elenco (ricerca, homepage) con i soli campi usati dalle viste."""
+        return {
+            "id": t["id"],
+            "name": html.unescape(t["name"]),
+            "slug": t["slug"],
+            "type": t.get("type", "tv"),
+            "score": t.get("score", "N/A"),
+            "seasons_count": t.get("seasons_count", 0),
+            "sub_ita": t.get("sub_ita", 0),
+            "last_air_date": t.get("last_air_date"),
+            "images": t.get("images", []),
+        }
+
+    def get_home(self):
+        """Slider della homepage (es. trending, latest, top10).
+
+        Restituisce una lista di dict {name, label, titles}: `name` e' la chiave
+        del sito, `label` il titolo in italiano, `titles` righe come in search().
+        """
+        resp = self.session.get(f"{BASE_URL}/it", headers=self._headers())
+        data = self._parse_data_page(resp.text)
+        if not data:
+            return []
+        sliders = data.get("props", {}).get("sliders", [])
+        return [
+            {
+                "name": s.get("name", ""),
+                "label": s.get("label", ""),
+                "titles": [self._summarize_title(t) for t in s.get("titles", [])],
+            }
+            for s in sliders
+        ]
+
+    def get_latest(self):
+        """Titoli aggiunti di recente (slider "latest" della homepage)."""
+        for slider in self.get_home():
+            if slider["name"] == "latest":
+                return slider["titles"]
+        return []
 
     def get_title(self, title_id, slug):
         """Ottiene dettagli titolo con lista stagioni e episodi della prima stagione."""

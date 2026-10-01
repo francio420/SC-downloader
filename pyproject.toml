@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sc-downloader"
+version = "1.0.0"
+description = "StreamingCommunity downloader (app Tkinter e libreria riusabile senza GUI)"
+requires-python = ">=3.9"
+dependencies = [
+    "curl_cffi>=0.7.0",
+    "yt-dlp>=2024.0.0",
+    "pycryptodomex>=3.19.0",
+]
+
+[project.optional-dependencies]
+# solo per decodificare le locandine .webp; l'app funziona anche senza
+images = ["Pillow>=10.0.0"]
+
+[tool.setuptools]
+packages = ["sc_downloader"]
+
+[tool.setuptools.package-data]
+sc_downloader = ["assets/*"]

@@ -9,11 +9,13 @@ vixcloud.co HLS streams, using `yt-dlp` + `ffmpeg`. No test suite, no build step
 
 ```
 main.py                          # entry point: `python main.py`
+pyproject.toml                   # makes `sc_downloader` pip-installable (`pip install -e`); used as a shared
+                                 # library by the sibling project ../SC-ServerforTV (headless server, no Tk)
 sc_downloader/
     __init__.py                  # verifies curl_cffi/yt-dlp/pycryptodomex are importable in sys.executable
     __main__.py                  # entry point: `python -m sc_downloader`
     constants.py                 # BASE_URL, USER_AGENT, ROOT_DIR, SETTINGS_FILE, DEBUG_LOG_FILE
-    api.py                       # StreamingCommunityAPI
+    api.py                       # StreamingCommunityAPI (search, get_title, get_season, get_home/get_latest)
     scraper.py                   # ScrapeEngine
     download_manager.py          # DownloadManager (the core download/threading logic)
     theme.py                     # palette, font picking, text measuring/ellipsizing, ttk style setup
@@ -108,6 +110,13 @@ disk (`glob` the destination dir for the episode's filename prefix and sum `os.p
 progress/speed are tracked as separate fields (`video_progress`/`audio_progress`/`video_speed_mb_s`/
 `audio_speed_mb_s`) since they're two independent subprocesses that can finish at different times.
 
+**`DownloadManager` is also used as a library by `../SC-ServerforTV`** (headless server, no Tk). Its hooks
+beyond the GUI's: `item_finished_callback(item)` (called from the worker thread right after an item is marked
+`completato`; `item["dest_dir"]` + `item["filename"]` + `.mp4` is the file; exceptions in it are swallowed) and
+`finished_callback` (batch end). The server relies on `start_all()` freezing its pending list at start, on
+`kill_current()` being non-blocking (it waits for `is_downloading` to drop to see partial files cleaned) and on
+queue items being plain JSON-serializable dicts (it persists them) — keep those properties when changing this class.
+
 **Process lifecycle**: every `yt-dlp` subprocess is started with `start_new_session=True` so
 `DownloadManager.kill_current()` can `os.killpg(...)` the whole process group (including any `ffmpeg` child)
 instead of leaving orphaned downloads running after Stop/window-close. `kill_current()` is the single choke
@@ -154,7 +163,8 @@ gitignored, both optional/self-healing if deleted): `.sc_settings.json` (last-us
 `max_parallel_episodes`, `concurrent_fragments`, loaded/saved by `ScDownloaderApp._load_settings`/
 `_save_settings`) and `.sc_debug.log` (append-only; `DownloadManager._log_failure` writes the exact commands
 and full `yt-dlp`/`ffmpeg` output whenever a download fails, so a failure can be diagnosed by reading this file
-instead of reproducing it). `ROOT_DIR` is also the default output folder. There's no download-history file —
+instead of reproducing it). `ROOT_DIR` is also the default output folder. The `SC_DEBUG_LOG` env var, read at import time in
+`constants.py`, overrides the log path (used by ../SC-ServerforTV, where `ROOT_DIR` would land in site-packages). There's no download-history file —
 that feature (and its UI panel) was removed entirely; nothing tracks past completed downloads.
 
 **GUI notes**: pure Tk, no extra GUI toolkit. Everything with rounded corners, gradients, icons or progress
