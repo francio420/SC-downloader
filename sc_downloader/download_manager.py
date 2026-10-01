@@ -498,10 +498,12 @@ class DownloadManager:
         if not muxed:
             inputs += ["-i", pick_media_file(audio_files)]
 
-        # Con stream muxato e' un semplice remux in .mp4 del file unico
+        # Con stream muxato e' un semplice remux in .mp4 del file unico.
+        # +faststart mette il moov all'inizio: il player delle TV Samsung (Tizen) legge l'mp4 in modo
+        # sequenziale e, col moov in fondo, resta in caricamento senza mai partire.
         final_path = os.path.join(dest_dir, f"{filename}.mp4")
         merge_cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-                     *inputs, "-c", "copy", final_path]
+                     *inputs, "-c", "copy", "-movflags", "+faststart", final_path]
         merge = subprocess.run(merge_cmd, capture_output=True, text=True)
         if merge.returncode != 0:
             self._log_failure(

@@ -70,7 +70,8 @@ markup changes by design — there's no stable API contract to rely on.
 **Video and audio are separate HLS renditions on this CDN**, not a single muxed stream. `DownloadManager`
 therefore launches **two parallel `yt-dlp` subprocesses** per episode (`-f bestvideo` / `-f bestaudio`, both with
 `--hls-prefer-native --concurrent-fragments N`, `N` = `DownloadManager.concurrent_fragments`, default 4), and
-once both exit 0, muxes them itself with a plain `ffmpeg -c copy`. Requires `--impersonate chrome`
+once both exit 0, muxes them itself with a plain `ffmpeg -c copy -movflags +faststart` (`+faststart` puts the
+`moov` atom first: Samsung TVs playing these files over HTTP via ../SC-ServerforTV stay stuck loading otherwise). Requires `--impersonate chrome`
 (curl_cffi/yt-dlp TLS impersonation) to get past vixcloud's fingerprinting.
 
 **Exception: some titles are served already muxed** (no `EXT-X-MEDIA:TYPE=AUDIO` in the master playlist; seen
