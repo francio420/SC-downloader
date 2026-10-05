@@ -61,6 +61,11 @@ class StreamingCommunityAPI:
             "images": t.get("images", []),
         }
 
+    @staticmethod
+    def _credits(people):
+        people = sorted(people or [], key=lambda p: (p.get("pivot") or {}).get("order", 0))
+        return [html.unescape(p["name"]) for p in people if p.get("name")]
+
     def get_home(self):
         """Slider della homepage (es. trending, latest, top10).
 
@@ -111,6 +116,9 @@ class StreamingCommunityAPI:
             "release_date": title.get("release_date") or title.get("last_air_date"),
             "runtime": title.get("runtime"),
             "genres": [g.get("name", "") for g in title.get("genres", []) if g.get("name")],
+            # attori e registi principali, nell'ordine del sito
+            "cast": self._credits(title.get("main_actors")),
+            "directors": self._credits(title.get("main_directors")),
             "images": title.get("images", []),
             # Lingua (anche sui singoli episodi): dub_ita=0 + sub_ita=1 = solo audio originale coi sottotitoli
             # (es. episodi appena usciti, non ancora doppiati). None se il sito non li riporta.
