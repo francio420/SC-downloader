@@ -17,6 +17,11 @@ class ScrapeEngine:
     def build_m3u8(self, title_id, episode_id=None):
         """Costruisce l'URL M3U8 partendo dal title_id e episode_id (None per
         i film, che hanno un solo video per titolo)."""
+        return self.build_m3u8_info(title_id, episode_id)[0]
+
+    def build_m3u8_info(self, title_id, episode_id=None):
+        """Come build_m3u8, ma restituisce (url, can_fhd): can_fhd e' il flag canPlayFHD del player in quel
+        momento. Se e' False la playlist arriva al massimo a 720p (il sito a volte non concede il 1080p)."""
         # Step 1: Fetch the iframe page to get the vixcloud embed URL
         iframe_url = f"{base_url()}/it/iframe/{title_id}"
         if episode_id is not None:
@@ -67,7 +72,7 @@ class ScrapeEngine:
         flat_params = "&".join(f"{k}={v[0]}" for k, v in params.items())
         m3u8_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}?{flat_params}"
 
-        return m3u8_url
+        return m3u8_url, can_fhd
 
     def has_separate_audio(self, m3u8_url):
         """True se la master playlist ha tracce audio separate (EXT-X-MEDIA

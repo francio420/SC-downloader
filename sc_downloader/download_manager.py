@@ -221,7 +221,7 @@ class DownloadManager:
     def _download_one(self, item, concurrent_fragments):
         """Scarica un elemento. True se completato, False se interrotto
         dall'utente (in quel caso i file parziali vengono eliminati)."""
-        m3u8_url = self.scrape.build_m3u8(item["title_id"], item["episode_id"])
+        m3u8_url, item["can_fhd"] = self.scrape.build_m3u8_info(item["title_id"], item["episode_id"])
         # Di solito video e audio sono rendition HLS separate, ma per alcuni
         # titoli il CDN offre solo stream gia' muxati: li' "bestvideo"/
         # "bestaudio" non trovano nulla e si scarica un unico stream "best".
@@ -501,11 +501,20 @@ class DownloadManager:
         # Con stream muxato e' un semplice remux in .mp4 del file unico.
         # +faststart mette il moov all'inizio: il player delle TV Samsung (Tizen) legge l'mp4 in modo
         # sequenziale e, col moov in fondo, resta in caricamento senza mai partire.
+        # Si scrive su un file temporaneo e lo si rinomina solo a merge riuscito: se il file finale c'e' gia'
+        # (si riscarica un episodio in qualita' migliore) non va perso in caso di errore.
         final_path = os.path.join(dest_dir, f"{filename}.mp4")
+        tmp_path = final_path + ".merging"
         merge_cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-                     *inputs, "-c", "copy", "-movflags", "+faststart", final_path]
+                     *inputs, "-c", "copy", "-movflags", "+faststart", "-f", "mp4", tmp_path]
         merge = subprocess.run(merge_cmd, capture_output=True, text=True)
-        if merge.returncode != 0:
+        if merge.returncode == 0:
+            os.replace(tmp_path, final_path)
+        else:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
             self._log_failure(
                 item, {**cmds, "ffmpeg merge": merge_cmd},
                 {"ffmpeg merge (stdout+stderr)": merge.stdout + merge.stderr},
