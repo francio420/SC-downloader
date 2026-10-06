@@ -3,7 +3,7 @@ from urllib.parse import parse_qs, urlparse
 
 from curl_cffi import requests as curl_requests
 
-from .constants import BASE_URL, USER_AGENT
+from .constants import USER_AGENT, base_url, follow_redirect
 
 # ─── ScrapeEngine ────────────────────────────────────────────────────────────
 
@@ -18,13 +18,14 @@ class ScrapeEngine:
         """Costruisce l'URL M3U8 partendo dal title_id e episode_id (None per
         i film, che hanno un solo video per titolo)."""
         # Step 1: Fetch the iframe page to get the vixcloud embed URL
-        iframe_url = f"{BASE_URL}/it/iframe/{title_id}"
+        iframe_url = f"{base_url()}/it/iframe/{title_id}"
         if episode_id is not None:
             iframe_url += f"?episode_id={episode_id}"
         resp_html = self.session.get(
             iframe_url,
-            headers={"User-Agent": USER_AGENT, "Referer": f"{BASE_URL}/it/watch/{title_id}"},
+            headers={"User-Agent": USER_AGENT, "Referer": f"{base_url()}/it/watch/{title_id}"},
         )
+        follow_redirect(iframe_url, getattr(resp_html, "url", None))
 
         vix_match = re.search(r'src="(https://vixcloud\.co/embed[^"]+)"', resp_html.text)
         if not vix_match:
@@ -35,7 +36,7 @@ class ScrapeEngine:
         # Step 2: Fetch the vixcloud embed page to get playlist info
         resp_vix = self.session.get(
             vix_url,
-            headers={"User-Agent": USER_AGENT, "Referer": f"{BASE_URL}/"},
+            headers={"User-Agent": USER_AGENT, "Referer": f"{base_url()}/"},
         )
 
         if resp_vix.status_code != 200:

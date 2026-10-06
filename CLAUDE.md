@@ -14,7 +14,7 @@ pyproject.toml                   # makes `sc_downloader` pip-installable (`pip i
 sc_downloader/
     __init__.py                  # verifies curl_cffi/yt-dlp/pycryptodomex are importable in sys.executable
     __main__.py                  # entry point: `python -m sc_downloader`
-    constants.py                 # BASE_URL, USER_AGENT, ROOT_DIR, SETTINGS_FILE, DEBUG_LOG_FILE
+    constants.py                 # base_url() (dominio variabile, SC_BASE_URL, segue i redirect), USER_AGENT, ROOT_DIR, SETTINGS_FILE, DEBUG_LOG_FILE
     api.py                       # StreamingCommunityAPI (search, get_title, get_season, get_home/get_latest)
     scraper.py                   # ScrapeEngine
     download_manager.py          # DownloadManager (the core download/threading logic)

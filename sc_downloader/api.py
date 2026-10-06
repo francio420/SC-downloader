@@ -4,7 +4,11 @@ import re
 
 from curl_cffi import requests as curl_requests
 
-from .constants import BASE_URL, USER_AGENT
+from .constants import USER_AGENT, base_url, follow_redirect
+
+class SiteError(Exception):
+    """Il sito non ha risposto con una sua pagina (errore HTTP, pagina di blocco, dominio sbagliato)."""
+
 
 # ─── StreamingCommunityAPI ───────────────────────────────────────────────────
 
@@ -21,8 +25,19 @@ class StreamingCommunityAPI:
     def _headers(self):
         return {
             "User-Agent": USER_AGENT,
-            "Referer": f"{BASE_URL}/",
+            "Referer": f"{base_url()}/",
         }
+
+    def _get(self, path, **kwargs):
+        """GET di una pagina del sito; se il dominio ha fatto redirect a uno nuovo, da qui in poi si usa quello."""
+        url = f"{base_url()}{path}"
+        resp = self.session.get(url, headers=self._headers(), **kwargs)
+        follow_redirect(url, getattr(resp, "url", None))
+        # pagina d'errore (sito giu', sovraccarico, bloccato): non e' una risposta vuota, e chi la ricevesse come
+        # tale salverebbe "nessun risultato". Il 404 resta una risposta (titolo che non esiste).
+        if resp.status_code >= 500 or resp.status_code in (403, 429):
+            raise SiteError(f"{path}: HTTP {resp.status_code}")
+        return resp
 
     def _parse_data_page(self, html):
         """Estrae il JSON dal data-page attribute di Inertia.js."""
@@ -38,10 +53,10 @@ class StreamingCommunityAPI:
     def search(self, query, page=1):
         """Cerca titoli. Restituisce lista di dict con id, name, type, score, slug, seasons_count."""
         params = {"q": query, "page": page}
-        resp = self.session.get(f"{BASE_URL}/it/search", headers=self._headers(), params=params)
+        resp = self._get("/it/search", params=params)
         data = self._parse_data_page(resp.text)
         if not data:
-            return [], 0
+            raise SiteError("la pagina di ricerca non e' quella del sito (dominio cambiato o pagina di blocco?)")
         titles = data.get("props", {}).get("titles", [])
         total = data.get("props", {}).get("totalCount", 0)
         return [self._summarize_title(t) for t in titles], total
@@ -72,7 +87,7 @@ class StreamingCommunityAPI:
         Restituisce una lista di dict {name, label, titles}: `name` e' la chiave
         del sito, `label` il titolo in italiano, `titles` righe come in search().
         """
-        resp = self.session.get(f"{BASE_URL}/it", headers=self._headers())
+        resp = self._get("/it")
         data = self._parse_data_page(resp.text)
         if not data:
             return []
@@ -95,8 +110,7 @@ class StreamingCommunityAPI:
 
     def get_title(self, title_id, slug):
         """Ottiene dettagli titolo con lista stagioni e episodi della prima stagione."""
-        url = f"{BASE_URL}/it/titles/{title_id}-{slug}"
-        resp = self.session.get(url, headers=self._headers())
+        resp = self._get(f"/it/titles/{title_id}-{slug}")
         data = self._parse_data_page(resp.text)
         if not data:
             return None
@@ -132,8 +146,7 @@ class StreamingCommunityAPI:
 
     def get_season(self, title_id, slug, season_number):
         """Ottiene episodi di una stagione specifica."""
-        url = f"{BASE_URL}/it/titles/{title_id}-{slug}/season-{season_number}"
-        resp = self.session.get(url, headers=self._headers())
+        resp = self._get(f"/it/titles/{title_id}-{slug}/season-{season_number}")
         data = self._parse_data_page(resp.text)
         if not data:
             return []
