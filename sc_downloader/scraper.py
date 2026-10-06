@@ -37,11 +37,15 @@ class ScrapeEngine:
             raise Exception("Impossibile trovare l'embed vixcloud.co")
 
         vix_url = vix_match.group(1).replace("&amp;", "&")
+        return self.m3u8_from_embed(vix_url, f"{base_url()}/")
 
+    def m3u8_from_embed(self, vix_url, referer):
+        """(url M3U8, can_fhd) dalla pagina embed di vixcloud. Serve anche ad altri siti che usano lo stesso
+        player (es. AnimeUnity, il cui /embed-url/{episodio} porta a vixcloud.co/embed/...)."""
         # Step 2: Fetch the vixcloud embed page to get playlist info
         resp_vix = self.session.get(
             vix_url,
-            headers={"User-Agent": USER_AGENT, "Referer": f"{base_url()}/"},
+            headers={"User-Agent": USER_AGENT, "Referer": referer},
         )
 
         if resp_vix.status_code != 200:

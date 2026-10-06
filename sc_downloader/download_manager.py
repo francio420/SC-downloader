@@ -166,7 +166,9 @@ class DownloadManager:
 
     @staticmethod
     def item_label(item):
-        """"Serie S01E02" per gli episodi, "Film (2010)" per i film."""
+        """"Serie S01E02" per gli episodi, "Film (2010)" per i film; "label" se l'elemento ne porta una sua."""
+        if item.get("label"):
+            return item["label"]
         if item.get("kind") == "movie":
             return f"{item['title_name']} ({item['year']})" if item.get("year") else item["title_name"]
         return f"{item['title_name']} S{item.get('season', 0):02d}E{item.get('episode', 0):02d}"
@@ -218,16 +220,28 @@ class DownloadManager:
         except OSError:
             pass
 
+    def m3u8_info(self, item):
+        """(url M3U8, can_fhd) di un elemento. Chi usa il pacchetto puo' ridefinirlo per altri siti che usano
+        lo stesso player (vedi ScrapeEngine.m3u8_from_embed)."""
+        return self.scrape.build_m3u8_info(item["title_id"], item["episode_id"])
+
     def _download_one(self, item, concurrent_fragments):
         """Scarica un elemento. True se completato, False se interrotto
         dall'utente (in quel caso i file parziali vengono eliminati)."""
-        m3u8_url, item["can_fhd"] = self.scrape.build_m3u8_info(item["title_id"], item["episode_id"])
+        m3u8_url, item["can_fhd"] = self.m3u8_info(item)
         # Di solito video e audio sono rendition HLS separate, ma per alcuni
         # titoli il CDN offre solo stream gia' muxati: li' "bestvideo"/
         # "bestaudio" non trovano nulla e si scarica un unico stream "best".
         muxed = not self.scrape.has_separate_audio(m3u8_url)
 
-        if item.get("kind") == "movie":
+        if item.get("dest_parts"):
+            # Cartella e nome scelti da chi ha messo in coda l'elemento (es. <output>/Anime/<Titolo>/), con lo
+            # stesso riuso case-insensitive delle cartelle
+            filename = re.sub(r'[<>:"/\\|?*]', '_', item["dest_name"])
+            dest_dir = self.output_folder
+            for part in item["dest_parts"]:
+                dest_dir = self._resolve_dir(dest_dir, re.sub(r'[<>:"/\\|?*]', '_', part))
+        elif item.get("kind") == "movie":
             # Film: <output>/Film/<Titolo (Anno)>.mp4, tutti insieme e separati
             # dalla cartella "Serie TV".
             filename = re.sub(r'[<>:"/\\|?*]', '_', self.item_label(item))
