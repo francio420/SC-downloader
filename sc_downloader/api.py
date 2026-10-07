@@ -13,6 +13,18 @@ class SiteError(Exception):
 # ─── StreamingCommunityAPI ───────────────────────────────────────────────────
 
 
+def _unescape_strings(value):
+    """I testi del sito arrivano con codici HTML anche dentro il JSON (es. "sull&#39;inferno" nei nomi e nelle trame
+    degli episodi): si decodificano tutti, una volta, appena letti."""
+    if isinstance(value, str):
+        return html.unescape(value) if "&" in value else value
+    if isinstance(value, list):
+        return [_unescape_strings(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _unescape_strings(v) for k, v in value.items()}
+    return value
+
+
 class StreamingCommunityAPI:
     """Comunicazione con StreamingCommunity parsing data-page HTML."""
 
@@ -44,7 +56,7 @@ class StreamingCommunityAPI:
         m = re.search(r'data-page="([^"]+)"', html)
         if not m:
             return None
-        data = json.loads(m.group(1).replace("&quot;", '"').replace("&amp;", "&"))
+        data = _unescape_strings(json.loads(m.group(1).replace("&quot;", '"').replace("&amp;", "&")))
         cdn_url = data.get("props", {}).get("cdn_url")
         if cdn_url:
             self.cdn_url = cdn_url.rstrip("/")
