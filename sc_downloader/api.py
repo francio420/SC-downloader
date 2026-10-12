@@ -90,7 +90,11 @@ class StreamingCommunityAPI:
 
     @staticmethod
     def _credits(people):
-        people = sorted(people or [], key=lambda p: (p.get("pivot") or {}).get("order", 0))
+        # "order" puo' mancare o essere null (es. Marshals): quelli restano in fondo, nell'ordine del sito
+        def order(p):
+            o = (p.get("pivot") or {}).get("order")
+            return o if isinstance(o, (int, float)) else float("inf")
+        people = sorted(people or [], key=order)
         return [html.unescape(p["name"]) for p in people if p.get("name")]
 
     def get_home(self):
