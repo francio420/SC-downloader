@@ -5,7 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A Python/Tkinter desktop app that searches StreamingCommunity and downloads episodes/movies via scraped
-vixcloud.co HLS streams, using `yt-dlp` + `ffmpeg`. No test suite, no build step. Layout:
+vixcloud.co HLS streams, using `yt-dlp` + `ffmpeg`. No test suite in this repo (a few pieces are covered by ../SC-ServerforTV's pytest
+suite, see below), no build step. Layout:
 
 ```
 main.py                          # entry point: `python main.py`
@@ -15,8 +16,9 @@ sc_downloader/
     __init__.py                  # verifies curl_cffi/yt-dlp/pycryptodomex are importable in sys.executable
     __main__.py                  # entry point: `python -m sc_downloader`
     constants.py                 # base_url() (dominio variabile, SC_BASE_URL, segue i redirect), USER_AGENT, ROOT_DIR, SETTINGS_FILE, DEBUG_LOG_FILE
-    api.py                       # StreamingCommunityAPI (search, get_title, get_season, get_home/get_latest)
-    scraper.py                   # ScrapeEngine
+    api.py                       # StreamingCommunityAPI (search, get_title incl. cast/directors, get_season,
+                                 # get_home/get_latest); every site string is HTML-unescaped on read
+    scraper.py                   # ScrapeEngine (build_m3u8 / build_m3u8_info -> (url, can_fhd), m3u8_from_embed)
     download_manager.py          # DownloadManager (the core download/threading logic)
     theme.py                     # palette, font picking, text measuring/ellipsizing, ttk style setup
     images.py                    # ImageLoader (threaded CDN fetch + Pillow processing, Pillow optional)
@@ -54,7 +56,10 @@ runtime — it only decodes the CDN's `.webp` posters/covers; without it `images
 placeholders and shows a one-time warning toast. It is deliberately not in `__init__.py`'s hard check. `.venv/` is gitignored — recreate it, don't assume it
 exists.
 
-There is no automated test suite. Verification in this repo has been manual: run the app and exercise it, or
+There is no automated test suite in this repo. ../SC-ServerforTV's `tests/` (pytest, installed against this
+package in editable mode) cover a few pieces of it: HTML-entity decoding of site text and `_credits` with
+`"order": null` (`tests/test_text.py`); when fixing a bug here that the server can hit, add a test there
+(`cd ../SC-ServerforTV && ./.venv/bin/python -m pytest`). Otherwise verification has been manual: run the app and exercise it, or
 write small standalone scripts that instantiate `DownloadManager`/`StreamingCommunityAPI` directly and print
 results (see git history for examples — e.g. probing real `yt-dlp`/`ffmpeg` output formats against a live or
 public test HLS URL before wiring a regex to it). Prefer that over assuming an output format.
@@ -67,11 +72,27 @@ a second scrape: fetch `/it/iframe/{title_id}`, regex out the vixcloud.co embed 
 inline `<script>` for `token`/`expires`/playlist `url` to build the final `.m3u8`. Both are brittle to upstream
 markup changes by design — there's no stable API contract to rely on.
 
+**Site text arrives HTML-escaped even inside that JSON** (e.g. `"sull&#39;inferno"` in episode names and plots):
+`_parse_data_page` runs every string through `_unescape_strings` (recursive `html.unescape`) right after
+`json.loads`, so callers get plain text — don't unescape again downstream. **Don't trust field types either**:
+`main_actors`/`main_directors` carry `pivot.order`, which can be present but `null` for a whole cast (Marshals,
+2026-10-12: sorting on it raised `'<' not supported between NoneType and NoneType` and the server showed the title
+as "StreamingCommunity non risponde"). `_credits` sorts non-numeric orders last, keeping the site's order.
+
+**`canPlayFHD`**: the vixcloud embed script says whether the player grants 1080p at that moment; without it the
+playlist tops out at 720p. `ScrapeEngine.build_m3u8_info()` returns `(url, can_fhd)` (`build_m3u8()` is the
+url-only wrapper) and `_download_one` stores it in `item["can_fhd"]`, so library users know why a download came
+out 720p (../SC-ServerforTV re-downloads those later). `m3u8_from_embed(vix_url, referer)` builds the playlist from
+any vixcloud embed page, for other sites using the same player (AnimeUnity).
+
 **Video and audio are separate HLS renditions on this CDN**, not a single muxed stream. `DownloadManager`
 therefore launches **two parallel `yt-dlp` subprocesses** per episode (`-f bestvideo` / `-f bestaudio`, both with
 `--hls-prefer-native --concurrent-fragments N`, `N` = `DownloadManager.concurrent_fragments`, default 4), and
 once both exit 0, muxes them itself with a plain `ffmpeg -c copy -movflags +faststart` (`+faststart` puts the
-`moov` atom first: Samsung TVs playing these files over HTTP via ../SC-ServerforTV stay stuck loading otherwise). Requires `--impersonate chrome`
+`moov` atom first: Samsung TVs playing these files over HTTP via ../SC-ServerforTV stay stuck loading otherwise).
+The merge writes `<file>.mp4.merging` (`-f mp4`, since the extension no longer says it) and `os.replace`s it onto
+the final name only on success, so re-downloading an existing file (e.g. in better quality) never loses the old
+one on failure. Requires `--impersonate chrome`
 (curl_cffi/yt-dlp TLS impersonation) to get past vixcloud's fingerprinting.
 
 **Exception: some titles are served already muxed** (no `EXT-X-MEDIA:TYPE=AUDIO` in the master playlist; seen
@@ -117,6 +138,11 @@ beyond the GUI's: `item_finished_callback(item)` (called from the worker thread 
 `finished_callback` (batch end). The server relies on `start_all()` freezing its pending list at start, on
 `kill_current()` being non-blocking (it waits for `is_downloading` to drop to see partial files cleaned) and on
 queue items being plain JSON-serializable dicts (it persists them) — keep those properties when changing this class.
+Extension points for other sites with the same player (the server's AnimeUnity queue uses all of them; the desktop
+app uses none): `DownloadManager.m3u8_info(item)` returns `(url, can_fhd)` and can be overridden in a subclass;
+items may carry `dest_parts` (folder components under `output_folder`, resolved case-insensitively like the rest)
+plus `dest_name` (file name without `.mp4`), which take precedence over the Film/Serie TV layout; and `label`,
+which `item_label()` returns as-is.
 
 **Process lifecycle**: every `yt-dlp` subprocess is started with `start_new_session=True` so
 `DownloadManager.kill_current()` can `os.killpg(...)` the whole process group (including any `ffmpeg` child)
