@@ -7,7 +7,6 @@ import sys
 import threading
 import time
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from .api import StreamingCommunityAPI
@@ -39,6 +38,7 @@ class DownloadManager:
         self._stop_flag = False
         self._current_processes = []
         self._processes_lock = threading.Lock()
+        self._wake = threading.Event()
         self.api = StreamingCommunityAPI()
         self.scrape = ScrapeEngine(session=self.api.session)
 
@@ -99,19 +99,30 @@ class DownloadManager:
         thread = threading.Thread(target=self._download_loop, daemon=True)
         thread.start()
 
-    def _download_loop(self):
-        # Congelati per l'intera durata di questo batch: cambiarli dal menu
-        # Impostazioni mentre e' in corso un download si applica solo al
-        # prossimo avvio, non a meta' di uno gia' partito.
-        parallel_episodes = max(1, self.max_parallel_episodes)
-        concurrent_fragments = self.concurrent_fragments
+    def wake(self):
+        """Fa ricontrollare subito al batch in corso quanti episodi puo' avviare (dopo aver cambiato
+        max_parallel_episodes o aggiunto elementi); altrimenti lo fa da solo entro mezzo secondo."""
+        self._wake.set()
 
+    def _next_item(self, pending):
+        """Prossimo elemento da avviare (None = nessuno). `pending` e' l'elenco preso all'avvio del batch;
+        chi usa il pacchetto puo' ridefinirlo per pescare anche gli elementi aggiunti dopo. Gli elementi tolti
+        dalla coda o gia' completati nel frattempo si saltano."""
+        while pending:
+            item = pending.pop(0)
+            if item in self.queue and item["status"] != "completato":
+                return item
+        return None
+
+    def _download_loop(self):
+        # max_parallel_episodes e concurrent_fragments si rileggono a ogni episodio avviato: cambiarli dal menu
+        # Impostazioni vale subito per i prossimi. Abbassare il limite non interrompe quelli gia' partiti, ne
+        # avvia di nuovi solo quando si scende sotto.
         pending = [item for item in self.queue if item["status"] != "completato"]
 
-        def worker(item):
+        def worker(item, concurrent_fragments):
             if self._stop_flag:
                 return
-            item["status"] = "in_corso"
             self.status_callback(self._status_message())
             self.progress_callback(self._overall_progress())
             try:
@@ -140,11 +151,26 @@ class DownloadManager:
                 self.status_callback(f"Errore: {e}")
             self.status_callback(self._status_message())
             self.progress_callback(self._overall_progress())
+            self._wake.set()
 
-        # Fino a parallel_episodes episodi scaricati contemporaneamente;
+        # Fino a max_parallel_episodes episodi scaricati contemporaneamente;
         # ognuno a sua volta scarica video e audio in parallelo tra loro.
-        with ThreadPoolExecutor(max_workers=parallel_episodes) as pool:
-            list(pool.map(worker, pending))
+        running = []
+        while True:
+            running = [t for t in running if t.is_alive()]
+            while not self._stop_flag and len(running) < max(1, self.max_parallel_episodes):
+                item = self._next_item(pending)
+                if item is None:
+                    break
+                # segnato subito (non nel thread) perche' _next_item non lo riprenda
+                item["status"] = "in_corso"
+                thread = threading.Thread(target=worker, args=(item, self.concurrent_fragments), daemon=True)
+                thread.start()
+                running.append(thread)
+            if not running:
+                break
+            self._wake.wait(0.5)
+            self._wake.clear()
 
         self.is_downloading = False
         self.current_index = -1

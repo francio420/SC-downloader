@@ -96,6 +96,7 @@ class ScDownloaderApp(tk.Tk):
             setattr(self, key, value)
         self.download_manager.max_parallel_episodes = self.max_parallel_episodes
         self.download_manager.concurrent_fragments = self.concurrent_fragments
+        self.download_manager.wake()  # vale subito anche per un download gia' avviato
         self._save_settings()
 
     # ── Layout ───────────────────────────────────────────────────────────────

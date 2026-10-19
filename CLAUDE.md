@@ -104,8 +104,12 @@ subprocess and just remuxes it to `.mp4` (`audio_progress` mirrors `video_progre
 `?` — joining with `&` yields `playlist/ID&b=1&token=...`, which vixcloud answers with 403.
 
 **Multiple episodes can also download in parallel** (`DownloadManager.max_parallel_episodes`, default 1, user
-configurable via the Settings dialog): `_download_loop` runs pending queue items through a
-`ThreadPoolExecutor(max_workers=max_parallel_episodes)` instead of a sequential loop. Because of this,
+configurable via the Settings dialog): `_download_loop` is a small scheduler that starts one thread per episode
+while fewer than `max_parallel_episodes` are running, picking the next one with `_next_item(pending)`. Both
+`max_parallel_episodes` and `concurrent_fragments` are re-read every time an episode starts, so changing them
+applies at once to the next episodes (lowering the limit never kills running ones); `wake()` makes the loop
+re-check immediately instead of within its 0.5 s poll. Items are marked `in_corso` by the scheduler *before*
+their thread starts, so `_next_item` can't hand the same one out twice. Because of this,
 `self._current_processes` (the list `kill_current()` kills to stop everything) is a **shared, lock-protected**
 list (`self._processes_lock`) that every concurrently-running `_download_one` call appends its own subprocesses
 into and removes them from when done — never reassign it wholesale, that would clobber other episodes'
@@ -136,7 +140,9 @@ progress/speed are tracked as separate fields (`video_progress`/`audio_progress`
 **`DownloadManager` is also used as a library by `../SC-ServerforTV`** (headless server, no Tk). Its hooks
 beyond the GUI's: `item_finished_callback(item)` (called from the worker thread right after an item is marked
 `completato`; `item["dest_dir"]` + `item["filename"]` + `.mp4` is the file; exceptions in it are swallowed) and
-`finished_callback` (batch end). The server relies on `start_all()` freezing its pending list at start, on
+`finished_callback` (batch end). The server overrides `_next_item` to pick `in_coda` items from the live queue
+(under its own lock), so items added mid-batch start without waiting for the batch to end, and calls `wake()` after
+adding items or changing the limits from its admin settings page. It relies on
 `kill_current()` being non-blocking (it waits for `is_downloading` to drop to see partial files cleaned) and on
 queue items being plain JSON-serializable dicts (it persists them) — keep those properties when changing this class.
 Extension points for other sites with the same player (the server's AnimeUnity queue uses all of them; the desktop
@@ -157,8 +163,8 @@ still yields a complete file, so that item is marked `completato`, not reset.
 
 **Threading model**: Tk main thread (plus `ScDownloaderApp._ui_pool`, 2 persistent threads behind `run_async`
 for search/title/season requests, and `ImageLoader`'s pool for images — both hand results back via
-`after(0, ...)`); one `_download_loop` background thread owning a `ThreadPoolExecutor`
-(size `max_parallel_episodes`) whose workers each run one episode's `_download_one`; and two `reader` threads
+`after(0, ...)`); one `_download_loop` background thread that starts up to `max_parallel_episodes` worker
+threads, each running one episode's `_download_one`; and two `reader` threads
 per *currently downloading* episode (one per subprocess' stdout) — so up to `2 * max_parallel_episodes` reader
 threads at once. Any GUI widget mutation from a background thread goes through `self.after(0, ...)` — never
 touch a widget directly from `_download_loop`/`worker`/`reader`/the search threads. The UI does **not** redraw on

@@ -48,14 +48,15 @@ python -m sc_downloader
 5. Segui l'avanzamento nella sezione **Download**, dove puoi anche cambiare cartella
 
 Nella sezione **Opzioni** puoi configurare la cartella, quanti episodi scaricare
-in parallelo e quanti frammenti concorrenti usare per ogni stream video/audio.
+in parallelo e quanti frammenti concorrenti usare per ogni stream video/audio: i cambi valgono subito per gli
+episodi che partono dopo, anche con un download gia' in corso (quelli avviati non si interrompono).
 Scorciatoie: Ctrl+F cerca, Ctrl+1/2/3 cambia sezione, Esc torna ai risultati, Ctrl+O apre la cartella dei
 download (apribile anche dal percorso in **Download**, da **Opzioni** o dall'icona cartella di ogni episodio
 completato).
 
 ## Note
 
-- Il programma usa `curl_cffi` per bypassare il fingerprinting TLS di vixcloud.co
+- Il programma usa `curl_cffi` per bypassare il fingerprinting TLS di vixcloud (dominio `.co` fino a ottobre 2026, ora `.cc`: si accettano entrambi)
 - I download vengono eseguiti tramite `yt-dlp` con `ffmpeg`; `pycryptodomex` e' necessaria per gli stream HLS criptati
 - L'ultima cartella di destinazione usata e le impostazioni di download sono salvate in `.sc_settings.json`
 - In caso di download fallito, i dettagli (comandi eseguiti e output completo) sono salvati in `.sc_debug.log`
