@@ -12,7 +12,7 @@ from datetime import datetime
 
 from .api import StreamingCommunityAPI
 from .constants import DEBUG_LOG_FILE
-from .scraper import ScrapeEngine
+from .scraper import ScrapeEngine, player_origin
 
 # ─── DownloadManager ─────────────────────────────────────────────────────────
 
@@ -276,8 +276,8 @@ class DownloadManager:
         base_args = [
             sys.executable, "-u", "-m", "yt_dlp",
             "--newline",
-            "--referer", "https://vixcloud.co/",
-            "--add-header", "Origin:https://vixcloud.co",
+            "--referer", f"{player_origin(m3u8_url)}/",
+            "--add-header", f"Origin:{player_origin(m3u8_url)}",
             "--impersonate", "chrome",
             "--hls-prefer-native",
             "--concurrent-fragments", str(concurrent_fragments),

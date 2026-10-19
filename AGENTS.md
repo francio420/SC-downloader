@@ -68,7 +68,8 @@ public test HLS URL before wiring a regex to it). Prefer that over assuming an o
 
 **Scraping is HTML-parsing, not a JSON API.** `StreamingCommunityAPI` fetches normal HTML pages and pulls JSON
 out of the `data-page="..."` attribute (an Inertia.js SPA embeds its page props there). `ScrapeEngine` then does
-a second scrape: fetch `/it/iframe/{title_id}`, regex out the vixcloud.co embed URL, fetch that, and regex the
+a second scrape: fetch `/it/iframe/{title_id}`, regex out the vixcloud embed URL (any TLD: `.co` until 2026-10, now `.cc`; Referer/Origin for playlist and
+segments follow the playlist host, `player_origin`), fetch that, and regex the
 inline `<script>` for `token`/`expires`/playlist `url` to build the final `.m3u8`. Both are brittle to upstream
 markup changes by design — there's no stable API contract to rely on.
 

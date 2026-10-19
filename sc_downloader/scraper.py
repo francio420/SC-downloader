@@ -5,11 +5,24 @@ from curl_cffi import requests as curl_requests
 
 from .constants import USER_AGENT, base_url, follow_redirect
 
+# Dominio del player: e' cambiato nel tempo (vixcloud.co, poi vixcloud.cc), quindi non si fissa l'estensione
+VIXCLOUD_EMBED_RE = re.compile(r"https://vixcloud\.[a-z]+/embed[^\"'\s]*")
+
+
+def player_origin(url):
+    """Origine (schema + host) di un URL del player, da usare come Referer/Origin nelle richieste a playlist e
+    segmenti. Se l'URL non e' leggibile ripiega sul dominio storico."""
+    parsed = urlparse(url or "")
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}"
+    return "https://vixcloud.co"
+
+
 # ─── ScrapeEngine ────────────────────────────────────────────────────────────
 
 
 class ScrapeEngine:
-    """Estrazione URL M3U8 da vixcloud.co."""
+    """Estrazione URL M3U8 dal player vixcloud."""
 
     def __init__(self, session=None):
         self.session = session or curl_requests.Session(impersonate="chrome")
@@ -32,16 +45,16 @@ class ScrapeEngine:
         )
         follow_redirect(iframe_url, getattr(resp_html, "url", None))
 
-        vix_match = re.search(r'src="(https://vixcloud\.co/embed[^"]+)"', resp_html.text)
+        vix_match = re.search(r'src="(' + VIXCLOUD_EMBED_RE.pattern + ')"', resp_html.text)
         if not vix_match:
-            raise Exception("Impossibile trovare l'embed vixcloud.co")
+            raise Exception("Impossibile trovare l'embed vixcloud")
 
         vix_url = vix_match.group(1).replace("&amp;", "&")
         return self.m3u8_from_embed(vix_url, f"{base_url()}/")
 
     def m3u8_from_embed(self, vix_url, referer):
         """(url M3U8, can_fhd) dalla pagina embed di vixcloud. Serve anche ad altri siti che usano lo stesso
-        player (es. AnimeUnity, il cui /embed-url/{episodio} porta a vixcloud.co/embed/...)."""
+        player (es. AnimeUnity, il cui /embed-url/{episodio} porta a vixcloud.<dominio>/embed/...)."""
         # Step 2: Fetch the vixcloud embed page to get playlist info
         resp_vix = self.session.get(
             vix_url,
@@ -84,9 +97,10 @@ class ScrapeEngine:
         video+audio (succede per alcuni titoli, es. quelli con "b=1" nell'URL).
         In caso di errore assume il caso tipico."""
         try:
+            origin = player_origin(m3u8_url)
             resp = self.session.get(
                 m3u8_url,
-                headers={"User-Agent": USER_AGENT, "Referer": "https://vixcloud.co/", "Origin": "https://vixcloud.co"},
+                headers={"User-Agent": USER_AGENT, "Referer": f"{origin}/", "Origin": origin},
             )
         except Exception:
             return True
