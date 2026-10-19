@@ -12,13 +12,13 @@ from urllib.parse import urlsplit
 # - follow_redirect() adotta da solo il nuovo dominio quando il vecchio risponde con un redirect (301 al
 #   nuovo indirizzo, quello che fa il sito a ogni cambio); chi usa il pacchetto puo' salvarlo con
 #   on_base_url_change() (il server lo tiene nel database, cosi' sopravvive ai riavvii).
-DEFAULT_BASE_URL = "https://streamingcommunityz.promo"
+DEFAULT_BASE_URL = "https://streamingcommunityz.build"
 _base_url = (os.environ.get("SC_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
 _listeners = []
 
 
 def base_url():
-    """Dominio attuale del sito, es. https://streamingcommunityz.promo (senza / finale)."""
+    """Dominio attuale del sito, es. https://streamingcommunityz.build (senza / finale)."""
     return _base_url
 
 
